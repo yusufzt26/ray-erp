@@ -698,6 +698,46 @@ route("DELETE", "/api/stock/batch/:batch", async (c) => {
   return json({ ok: true });
 });
 
+// ---------------------------------------------------------------- material per piece (BOM)
+const BOM_SQL = `SELECT b.product_id, b.component_id, b.qty_per, p.code, p.name, p.uom
+  FROM product_bom b JOIN products p ON p.id = b.component_id`;
+
+route("GET", "/api/bom", async (c) => {
+  require(c, "stock");
+  return json({ rows: await q(BOM_SQL + " ORDER BY b.product_id, b.id") });
+});
+
+route("GET", "/api/bom/:id", async (c) => {
+  require(c, "products");
+  const id = Number(c.params.id);
+  return json({
+    lines: await q(BOM_SQL + " WHERE b.product_id = $1 ORDER BY b.id", [id]),
+    components: await q("SELECT id, code, name, uom FROM products WHERE active = 1 AND id <> $1 ORDER BY code", [id]),
+  });
+});
+
+route("PUT", "/api/bom/:id", async (c) => {
+  require(c, "products", "edit");
+  const id = Number(c.params.id);
+  if (!(await one("SELECT id FROM products WHERE id = $1", [id]))) fail(404, "Product not found");
+  const seen = new Set<number>();
+  const lines: [number, number][] = [];
+  for (const l of (Array.isArray(c.body.lines) ? c.body.lines : []).slice(0, 100)) {
+    const comp = num(l.component_id), qty = num(l.qty_per);
+    if (!comp && !qty) continue;
+    if (!comp || !qty || qty <= 0) fail(400, "Each line needs an item and a quantity per piece.");
+    if (comp === id) fail(400, "A product cannot use itself.");
+    if (seen.has(comp!)) fail(400, "The same item is listed twice.");
+    seen.add(comp!); lines.push([comp!, qty!]);
+  }
+  await tx(async (query) => {
+    await query("DELETE FROM product_bom WHERE product_id = $1", [id]);
+    for (const [comp, qty] of lines)
+      await query("INSERT INTO product_bom (product_id, component_id, qty_per) VALUES ($1, $2, $3)", [id, comp, qty]);
+  });
+  return json({ ok: true });
+});
+
 // ---------------------------------------------------------------- sales register
 route("GET", "/api/reports/sales", async (c) => {
   require(c, "sales_invoice");

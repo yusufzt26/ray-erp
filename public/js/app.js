@@ -241,6 +241,7 @@ pages.masterForm = async (master, id) => {
       scrollTo(0, 0);
     }
   };
+  if (master === "products" && row && ["FG", "SA"].includes(row.category)) await more.bomCard(row, editable);
   if ($("#del")) $("#del").onclick = async () => {
     if (!confirm(`Delete ${row.code}?`)) return;
     const res = await api("DELETE", `/api/m/${master}/${row.id}`);

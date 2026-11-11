@@ -118,12 +118,12 @@ export function morePages(ctx) {
 
   async function stockEntry() {
     if (!can("stock", "edit")) return ctx.forbidden();
-    const { rows: items } = await api("GET", "/api/stock");
+    const [{ rows: items }, { rows: bom }] = await Promise.all([api("GET", "/api/stock"), api("GET", "/api/bom")]);
     const pre = params().get("item");
     const opts = (sel, filter = () => true) => `<option value="">— pick item —</option>` + items.filter(filter)
       .map((p) => `<option value="${p.id}" ${String(sel) === String(p.id) ? "selected" : ""}>${h(p.code)} · ${h(p.name)} (${qtyFmt(p.balance)} ${h(p.uom || "")})</option>`).join("");
-    const row = (sel, filter) => `<tr><td><select name="product_id" class="prod wide">${opts(sel, filter)}</select></td>
-      <td><input name="qty" inputmode="decimal" class="qty"></td><td><button type="button" class="rm" title="Remove">✕</button></td></tr>`;
+    const row = (sel, filter, qty = "") => `<tr><td><select name="product_id" class="prod wide">${opts(sel, filter)}</select></td>
+      <td><input name="qty" inputmode="decimal" class="qty" value="${qty}"></td><td><button type="button" class="rm" title="Remove">✕</button></td></tr>`;
     layout(`
       <div class="head"><h1>Stock entry</h1><div class="actions"><a class="btn" href="#/stock">← Stock</a></div></div>
       <div id="err"></div>
@@ -138,7 +138,8 @@ export function morePages(ctx) {
         <table class="lines short"><thead><tr><th>Item</th><th>Qty</th><th></th></tr></thead><tbody id="l1">${row(pre)}${row()}</tbody></table>
         <button type="button" class="btn small" id="add1">＋ Add line</button>
         <div id="cons" hidden>
-          <h3>Raw material / child parts used <small class="muted">(optional, taken out of stock)</small></h3>
+          <h3>Raw material / child parts used <small class="muted">(taken out of stock)</small></h3>
+          <p class="muted small" id="bomnote" hidden>Worked out from each product's "material per piece". You can change the quantities.</p>
           <table class="lines short"><thead><tr><th>Item</th><th>Qty used</th><th></th></tr></thead><tbody id="l2">${row(null, (p) => p.category !== "FG")}</tbody></table>
           <button type="button" class="btn small" id="add2">＋ Add line</button>
         </div>
@@ -154,6 +155,19 @@ export function morePages(ctx) {
     $$("input[name=kind]").forEach((r) => (r.onchange = sync)); sync();
     $("#add1").onclick = () => $("#l1").insertAdjacentHTML("beforeend", row());
     $("#add2").onclick = () => $("#l2").insertAdjacentHTML("beforeend", row(null, (p) => p.category !== "FG"));
+    // Production: work out material used from each product's material per piece.
+    const fillConsume = () => {
+      if ($("#f").kind.value !== "Production") return;
+      const need = new Map();
+      for (const l of read($("#l1"))) for (const b of bom.filter((b) => String(b.product_id) === String(l.product_id)))
+        need.set(b.component_id, (need.get(b.component_id) || 0) + Number(b.qty_per) * parseFloat(l.qty || 0));
+      if (!need.size) return;
+      $("#l2").innerHTML = [...need].map(([id, q]) => row(id, (p) => p.category !== "FG", +q.toFixed(3))).join("");
+      $("#bomnote").hidden = false;
+    };
+    $("#l1").addEventListener("input", fillConsume);
+    $("#l1").addEventListener("change", fillConsume);
+    $$("input[name=kind]").forEach((r) => r.addEventListener("change", fillConsume));
     $("#f").addEventListener("click", (e) => { if (e.target.classList.contains("rm")) e.target.closest("tr").remove(); });
     const read = (tb) => $$("tr", tb).map((tr) => ({ product_id: $("[name=product_id]", tr).value, qty: $("[name=qty]", tr).value })).filter((l) => l.product_id && l.qty);
     $("#f").onsubmit = async (e) => {
@@ -341,5 +355,40 @@ export function morePages(ctx) {
     };
   }
 
-  return { stockList, stockItem, stockMoves, stockEntry, salesRegister, accounts, statement, payments, paymentForm };
+  // ============================================================== MATERIAL PER PIECE (on the product form)
+  async function bomCard(product, editable) {
+    const { lines, components } = await api("GET", `/api/bom/${product.id}`);
+    const opts = (sel) => '<option value="">— pick item —</option>' + components
+      .map((p) => `<option value="${p.id}" ${String(sel) === String(p.id) ? "selected" : ""}>${h(p.code)} · ${h(p.name)} (${h(p.uom || "")})</option>`).join("");
+    const row = (l = {}) => `<tr><td><select name="component_id" class="prod wide">${opts(l.component_id)}</select></td>
+      <td><input name="qty_per" inputmode="decimal" class="qty" value="${l.qty_per ?? ""}"></td><td class="muted uom">${h(l.uom || "")}</td>
+      <td>${editable ? '<button type="button" class="rm" title="Remove">✕</button>' : ""}</td></tr>`;
+    $("main").insertAdjacentHTML("beforeend", `
+      <form id="bom" class="card"><h2>Material used per piece</h2>
+        <p class="muted small">What goes into <b>one ${h(product.uom || "piece")}</b> of this item, e.g. 0.45 MTR of PA12 tube and 2 NOS connectors.
+          When Production enters pieces made, the material used is worked out from this.</p>
+        <div id="bomerr"></div>
+        <fieldset ${editable ? "" : "disabled"}><table class="lines short"><thead><tr><th>Material / part</th><th>Qty per piece</th><th></th><th></th></tr></thead>
+          <tbody id="bomlines">${lines.map(row).join("")}${editable || !lines.length ? row() : ""}</tbody></table></fieldset>
+        ${editable ? '<button type="button" class="btn small" id="bomadd">＋ Add line</button><div class="buttons"><button class="btn primary">💾 Save material list</button></div>' : ""}
+      </form>`);
+    if (!editable) return;
+    const uomOf = Object.fromEntries(components.map((p) => [p.id, p.uom || ""]));
+    $("#bomadd").onclick = () => $("#bomlines").insertAdjacentHTML("beforeend", row());
+    $("#bom").addEventListener("click", (e) => { if (e.target.classList.contains("rm")) e.target.closest("tr").remove(); });
+    $("#bom").addEventListener("change", (e) => { if (e.target.name === "component_id") $(".uom", e.target.closest("tr")).textContent = uomOf[e.target.value] || ""; });
+    $("#bom").onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = $("#bom button.primary");
+      busy(btn, true, "Saving…");
+      try {
+        const body = { lines: $$("#bomlines tr").map((tr) => ({ component_id: $("[name=component_id]", tr).value, qty_per: $("[name=qty_per]", tr).value })) };
+        await api("PUT", `/api/bom/${product.id}`, body);
+        $("#bomerr").innerHTML = '<div class="flash ok">Material list saved.</div>';
+      } catch (err) { $("#bomerr").innerHTML = errorBox([err.message]); }
+      busy(btn, false);
+    };
+  }
+
+  return { bomCard, stockList, stockItem, stockMoves, stockEntry, salesRegister, accounts, statement, payments, paymentForm };
 }
