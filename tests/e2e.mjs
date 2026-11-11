@@ -241,6 +241,22 @@ await p.fill("[name=doc_no]", "VB-777"); await p.fill("[name=total_amount]", "35
 await p.click("button:has-text('Save Vendor Invoice')"); await p.waitForSelector("text=saved");
 ok(await statusOf("grn", grnId) === "Billed", "GRN billed after vendor invoice");
 ok(Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance) === rmBefore + 300, "vendor invoice from GRN does not add stock twice");
+// advance paid against the purchase order is used for the vendor bill made from it
+{
+  await p.goto(U + "/#/d/purchase_order/" + poId); await p.waitForSelector("text=Record advance");
+  await p.click("text=Record advance"); await p.waitForSelector("#orderbox select[name=order_id]");
+  ok(await p.inputValue("#orderbox select[name=order_id]") === String(poId) && await p.isHidden("#bills"), "advance form opens with the PO picked");
+  await p.fill("[name=amount]", "10000"); await p.fill("[name=reference]", "ADV-1");
+  await p.screenshot({ path: join(SHOTS, "advance_form.png"), fullPage: true });
+  await p.click("button:has-text('Save payment')"); await p.waitForSelector("text=Payment saved");
+  const vb = (await getJ("/api/bills/out?party=1")).rows.find((r) => r.ref === "VB-777");
+  ok(vb && vb.advance === 10000 && vb.balance === 25400, "advance against PO adjusted in its vendor bill " + JSON.stringify(vb));
+  const adv = await getJ("/api/orders/" + poId + "/advance");
+  ok(adv.total === 10000 && adv.used === 10000 && adv.left === 0, "PO shows advance used " + JSON.stringify(adv));
+  await p.goto(U + "/#/d/purchase_order/" + poId); await p.waitForSelector(".paystat");
+  ok((await p.textContent(".paystat")).includes("10,000.00"), "advance strip on the PO");
+  await p.screenshot({ path: join(SHOTS, "advance_po.png"), fullPage: true });
+}
 
 // e-way bill from an invoice and from a challan
 {

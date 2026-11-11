@@ -316,7 +316,7 @@ export function morePages(ctx) {
       <div class="scroll"><table class="grid">
         <tr><th>Date</th><th>Type</th><th>Party</th><th>Mode</th><th>Reference</th><th class="num">Amount</th><th>Against</th><th>Note</th>${editable ? "<th></th>" : ""}</tr>
         ${rows.map((r) => `<tr class="click" data-href="#/accounts/${r.direction}/${r.party_id}"><td>${dmy(r.pay_date)}</td><td>${r.direction === "in" ? "⬇ Received" : "⬆ Paid"}</td>
-          <td>${h(r.party)}</td><td>${h(r.mode)}</td><td>${h(r.reference)}</td><td class="num">${money(r.amount)}</td><td>${h(r.against || "On account")}</td><td>${h(r.notes)}</td>
+          <td>${h(r.party)}</td><td>${h(r.mode)}</td><td>${h(r.reference)}</td><td class="num">${money(r.amount)}</td><td>${h(r.order_ref || r.against || "On account")}</td><td>${h(r.notes)}</td>
           ${editable ? `<td><button class="btn small" data-del="${r.id}">Delete</button></td>` : ""}</tr>`).join("")
           || '<tr><td colspan="9" class="muted">No payments entered yet.</td></tr>'}
       </table></div>`);
@@ -344,6 +344,11 @@ export function morePages(ctx) {
           <label>Reference <input name="reference" placeholder="UTR / cheque no"></label>
           <label class="full">Note <input name="notes" value="${p.get("ref") ? `Against ${h(p.get("ref"))}` : ""}"></label>
         </div>
+        <div class="seg" id="mode">
+          <label class="check inline"><input type="radio" name="pmode" value="bills" ${p.get("order") ? "" : "checked"}> Against ${dir === "in" ? "invoices" : "bills"}</label>
+          <label class="check inline"><input type="radio" name="pmode" value="advance" ${p.get("order") ? "checked" : ""}> Advance against ${dir === "in" ? "customer's PO / sales order" : "our purchase order"}</label>
+        </div>
+        <div id="orderbox" hidden></div>
         <div id="bills"></div>
         <div class="buttons"><button class="btn primary">Save payment</button></div>
       </form>`);
@@ -447,8 +452,24 @@ export function morePages(ctx) {
       if (clear) clear.onclick = () => { inputs().forEach((i) => (i.value = "")); $$("#bills [name=tick]").forEach((t) => (t.checked = false)); syncAmount(); };
       if (pre && !amountTyped) syncAmount(); else if (!manual && num(form.amount.value) > 0) suggest(); else summary();
     };
-    form.party_id.onchange = () => { p.delete("bill"); manual = false; loadBills(); };
+    const advMode = () => form.querySelector("[name=pmode]:checked")?.value === "advance";
+    const loadOrders = async () => {
+      const box = $("#orderbox");
+      box.hidden = !advMode();
+      $("#bills").hidden = advMode();
+      if (!advMode()) return;
+      const party = form.party_id.value;
+      if (!party) { box.innerHTML = '<p class="muted">Pick the party first.</p>'; return; }
+      const { rows } = await api("GET", `/api/orders/open/${dir}?party=${party}`);
+      box.innerHTML = rows.length ? `<label>${dir === "in" ? "Sales order (customer PO)" : "Purchase order"} <span class="req">*</span>
+          <select name="order_id" required><option value="">— pick —</option>${rows.map((o) => `<option value="${o.id}" ${p.get("order") === String(o.id) ? "selected" : ""}>${h(o.ref_no)}${o.doc_no && o.doc_no !== o.ref_no ? ` · ${h(o.doc_no)}` : ""}${o.doc_date ? ` · ${dmy(o.doc_date)}` : ""} · ₹ ${money(o.total_amount)} (${h(o.status)})</option>`).join("")}</select></label>
+        <p class="muted small">The advance is used automatically for the ${dir === "in" ? "invoices" : "vendor bills"} made from this order. Until then it shows as an advance on the order.</p>`
+        : `<p class="muted">No ${dir === "in" ? "sales orders" : "purchase orders"} for this party.</p>`;
+    };
+    $$("[name=pmode]").forEach((r) => (r.onchange = loadOrders));
+    form.party_id.onchange = () => { p.delete("bill"); p.delete("order"); manual = false; loadBills(); loadOrders(); };
     await loadBills();
+    await loadOrders();
     form.onsubmit = async (e) => {
       e.preventDefault();
       const btn = $("button.primary", e.target);
@@ -456,8 +477,8 @@ export function morePages(ctx) {
       try {
         const fd = new FormData(e.target);
         const body = { party_id: fd.get("party_id"), pay_date: fd.get("pay_date"), amount: fd.get("amount"), mode: fd.get("mode"),
-          reference: fd.get("reference"), notes: fd.get("notes"), direction: dir,
-          allocations: $$("#bills tr[data-id]").map((tr) => ({ bill_id: Number(tr.dataset.id), amount: num($("[name=pay]", tr).value) })).filter((a) => a.amount > 0) };
+          reference: fd.get("reference"), notes: fd.get("notes"), direction: dir, order_id: advMode() ? fd.get("order_id") : null,
+          allocations: advMode() ? [] : $$("#bills tr[data-id]").map((tr) => ({ bill_id: Number(tr.dataset.id), amount: num($("[name=pay]", tr).value) })).filter((a) => a.amount > 0) };
         await api("POST", "/api/payments", body);
         flash("Payment saved.");
         location.hash = `#/accounts/${dir}/${body.party_id}`;

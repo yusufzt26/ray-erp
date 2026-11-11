@@ -1242,28 +1242,64 @@ route("GET", "/api/accounts/statement/:dir/:id", async (c) => {
 // Bill-wise status: money tied to a bill counts first; the rest of a party's payments goes to its oldest open bills.
 async function billStatus(dir: "in" | "out", partyId: number | null = null) {
   const bills = await q(dir === "in"
-    ? `SELECT id, inv_no AS ref, to_char(inv_date, 'YYYY-MM-DD') AS day, customer_id AS party_id, COALESCE(total, 0) AS total, po_no AS note
+    ? `SELECT id, inv_no AS ref, to_char(inv_date, 'YYYY-MM-DD') AS day, customer_id AS party_id, COALESCE(total, 0) AS total, po_no AS note,
+        customer_po_id AS order_id
         FROM invoices WHERE status <> 'Cancelled' AND ($1::int IS NULL OR customer_id = $1) ORDER BY inv_date, id`
-    : `SELECT id, COALESCE(doc_no, ref_no) AS ref, to_char(COALESCE(doc_date, created_at::date), 'YYYY-MM-DD') AS day, party_id,
-        COALESCE(total_amount, subtotal, 0) AS total, ref_no AS note
-        FROM documents WHERE doc_type = 'vendor_invoice' AND status <> 'Cancelled' AND ($1::int IS NULL OR party_id = $1) ORDER BY doc_date, id`, [partyId]);
+    : `SELECT d.id, COALESCE(d.doc_no, d.ref_no) AS ref, to_char(COALESCE(d.doc_date, d.created_at::date), 'YYYY-MM-DD') AS day, d.party_id,
+        COALESCE(d.total_amount, d.subtotal, 0) AS total, d.ref_no AS note,
+        CASE WHEN par.doc_type = 'purchase_order' THEN par.id WHEN par.doc_type = 'grn' THEN par.parent_id END AS order_id
+        FROM documents d LEFT JOIN documents par ON par.id = d.parent_id
+        WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled' AND ($1::int IS NULL OR d.party_id = $1) ORDER BY d.doc_date, d.id`, [partyId]);
   const allocs = await q(`SELECT a.bill_id, SUM(a.amount) AS amt FROM payment_allocations a JOIN payments p ON p.id = a.payment_id
     WHERE p.direction = $1 AND ($2::int IS NULL OR p.party_id = $2) GROUP BY a.bill_id`, [dir, partyId]);
-  const loose = await q(`SELECT p.party_id, SUM(p.amount - COALESCE(a.amt, 0)) AS amt FROM payments p
+  const loose = await q(`SELECT p.party_id, p.order_id, SUM(p.amount - COALESCE(a.amt, 0)) AS amt FROM payments p
     LEFT JOIN (SELECT payment_id, SUM(amount) AS amt FROM payment_allocations GROUP BY payment_id) a ON a.payment_id = p.id
-    WHERE p.direction = $1 AND ($2::int IS NULL OR p.party_id = $2) GROUP BY p.party_id`, [dir, partyId]);
+    WHERE p.direction = $1 AND ($2::int IS NULL OR p.party_id = $2) GROUP BY p.party_id, p.order_id`, [dir, partyId]);
   const linked = Object.fromEntries(allocs.map((r) => [r.bill_id, Number(r.amt)]));
-  const free: Record<string, number> = Object.fromEntries(loose.map((r) => [r.party_id, Math.max(0, Number(r.amt))]));
+  // money not tied to a bill: advances against an order wait for that order's bills; the rest goes to the oldest bills
+  const free: Record<string, number> = {};
+  const orderFree: Record<string, number> = {};
+  for (const r of loose) {
+    const amt = Math.max(0, Number(r.amt));
+    if (r.order_id) orderFree[r.order_id] = (orderFree[r.order_id] || 0) + amt;
+    else free[r.party_id] = (free[r.party_id] || 0) + amt;
+  }
+  const orderUsed: Record<string, number> = {};
   const rows = bills.map((b) => {
     const total = round2(Number(b.total));
     const direct = round2(Math.min(total, linked[b.id] || 0));
-    const auto = round2(Math.min(total - direct, free[b.party_id] || 0));
+    const adv = b.order_id ? round2(Math.min(total - direct, orderFree[b.order_id] || 0)) : 0;
+    if (adv) { orderFree[b.order_id] = round2(orderFree[b.order_id] - adv); orderUsed[b.order_id] = round2((orderUsed[b.order_id] || 0) + adv); }
+    const auto = round2(Math.min(total - direct - adv, free[b.party_id] || 0));
     free[b.party_id] = round2((free[b.party_id] || 0) - auto);
-    const paid = round2(direct + auto), balance = round2(total - paid);
-    return { ...b, total, direct, auto, paid, balance, pay_status: balance <= 0.5 ? "Paid" : paid > 0 ? "Part paid" : "Unpaid" };
+    const paid = round2(direct + adv + auto), balance = round2(total - paid);
+    return { ...b, total, direct, advance: adv, auto, paid, balance, pay_status: balance <= 0.5 ? "Paid" : paid > 0 ? "Part paid" : "Unpaid" };
   });
-  return { rows, advance: free };
+  return { rows, advance: free, orderLeft: orderFree, orderUsed };
 }
+
+route("GET", "/api/orders/:id/advance", async (c) => {
+  if (!c.user) fail(401, "Please log in.");
+  const order = await one("SELECT id, doc_type, party_id, ref_no FROM documents WHERE id = $1 AND doc_type IN ('customer_po', 'purchase_order')", [Number(c.params.id)]);
+  if (!order) fail(404, "Not found");
+  const dir = order.doc_type === "customer_po" ? "in" : "out";
+  const pays = await q(`SELECT id, to_char(pay_date, 'YYYY-MM-DD') AS pay_date, amount, mode, reference FROM payments
+    WHERE order_id = $1 AND direction = $2 ORDER BY pay_date, id`, [order.id, dir]);
+  if (!pays.length) return json({ total: 0, used: 0, left: 0, payments: [], dir });
+  const st = await billStatus(dir as any, order.party_id);
+  const total = round2(pays.reduce((t, p) => t + Number(p.amount), 0));
+  return json({ total, used: st.orderUsed[order.id] || 0, left: st.orderLeft[order.id] || 0, payments: pays, dir });
+});
+
+route("GET", "/api/orders/open/:dir", async (c) => {
+  require(c, "accounts");
+  const dir = c.params.dir === "out" ? "out" : "in";
+  const party = num(new URL(c.req.url).searchParams.get("party"));
+  const rows = await q(`SELECT id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, total_amount, status FROM documents
+    WHERE doc_type = $1 AND party_id = $2 AND status NOT IN ('Cancelled') ORDER BY doc_date DESC NULLS LAST, id DESC LIMIT 100`,
+    [dir === "in" ? "customer_po" : "purchase_order", party]);
+  return json({ rows });
+});
 
 route("GET", "/api/bills/:dir", async (c) => {
   const dir = c.params.dir === "out" ? "out" : "in";
@@ -1301,7 +1337,8 @@ route("GET", "/api/payments", async (c) => {
       CASE WHEN p.direction = 'in' THEN cu.name ELSE v.name END AS party,
       (SELECT string_agg(CASE WHEN p.direction = 'in' THEN i.inv_no ELSE COALESCE(d.doc_no, d.ref_no) END, ', ')
         FROM payment_allocations a LEFT JOIN invoices i ON p.direction = 'in' AND i.id = a.bill_id
-        LEFT JOIN documents d ON p.direction = 'out' AND d.id = a.bill_id WHERE a.payment_id = p.id) AS against
+        LEFT JOIN documents d ON p.direction = 'out' AND d.id = a.bill_id WHERE a.payment_id = p.id) AS against,
+      (SELECT 'Advance for ' || o.ref_no || COALESCE(' (' || NULLIF(o.doc_no, o.ref_no) || ')', '') FROM documents o WHERE o.id = p.order_id) AS order_ref
     FROM payments p LEFT JOIN customers cu ON p.direction = 'in' AND cu.id = p.party_id LEFT JOIN vendors v ON p.direction = 'out' AND v.id = p.party_id
     ORDER BY p.pay_date DESC, p.id DESC LIMIT 300`);
   return json({ rows });
@@ -1330,8 +1367,13 @@ route("POST", "/api/payments", async (c) => {
     }
   }
   const id = await tx(async (query) => {
-    const row = (await query("INSERT INTO payments (direction, party_id, pay_date, amount, mode, reference, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
-      [dir, partyId, day, amount, str(b.mode) || null, str(b.reference) || null, str(b.notes) || null, c.user!.id]))[0];
+    let orderId = num(b.order_id);
+    if (orderId) {
+      const o = (await query("SELECT id FROM documents WHERE id = $1 AND doc_type = $2 AND party_id = $3", [orderId, dir === "in" ? "customer_po" : "purchase_order", partyId]))[0];
+      if (!o) fail(400, "That order does not belong to this party.");
+    }
+    const row = (await query("INSERT INTO payments (direction, party_id, pay_date, amount, mode, reference, notes, created_by, order_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
+      [dir, partyId, day, amount, str(b.mode) || null, str(b.reference) || null, str(b.notes) || null, c.user!.id, orderId || null]))[0];
     for (const a of allocs) await query("INSERT INTO payment_allocations (payment_id, bill_id, amount) VALUES ($1, $2, $3)", [row.id, a.bill_id, a.amount]);
     return row.id;
   });
@@ -1505,8 +1547,11 @@ route("POST", "/api/bank/post", async (c) => {
           const allocs = (Array.isArray(it.allocations) ? it.allocations : []).map((a: any) => ({ bill_id: num(a.id ?? a.bill_id), amount: round2(num(a.amount) || 0) }))
             .filter((a: any) => a.bill_id && a.amount > 0);
           if (allocs.reduce((t: number, a: any) => t + a.amount, 0) > amt + 0.01) throw new Error(`${label}: bills add up to more than the amount.`);
-          payId = (await query("INSERT INTO payments (direction, party_id, pay_date, amount, mode, reference, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
-            [dir, party.id, l.day, amt, payMode(l.description), l.ref || null, "Bank: " + String(l.description).slice(0, 200), c.user!.id]))[0].id;
+          const orderId = num(it.order_id);
+          if (orderId && !(await query("SELECT 1 FROM documents WHERE id = $1 AND party_id = $2 AND doc_type = $3", [orderId, party.id, dir === "in" ? "customer_po" : "purchase_order"])).length)
+            throw new Error(`${label}: that order does not belong to ${party.name}.`);
+          payId = (await query("INSERT INTO payments (direction, party_id, pay_date, amount, mode, reference, notes, created_by, order_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
+            [dir, party.id, l.day, amt, payMode(l.description), l.ref || null, "Bank: " + String(l.description).slice(0, 200), c.user!.id, orderId || null]))[0].id;
           for (const a of allocs) await query("INSERT INTO payment_allocations (payment_id, bill_id, amount) VALUES ($1, $2, $3)", [payId, a.bill_id, a.amount]);
           postedAs = `${dir === "in" ? "Received from" : "Paid to"} ${party.name}${allocs.length ? "" : " (on account)"}`;
           const key = ruleKey(l.description);

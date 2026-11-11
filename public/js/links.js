@@ -25,5 +25,5 @@ export async function payStatus(api, dir, id) {
   const list = payments.map((p) => `${dmy(p.pay_date)} ${h(p.mode || "")} ${h(p.reference || "")} ${money(p.amount)}`).join(" · ");
   return `<div class="card paystat"><span class="pill ${cls}">${h(bill.pay_status)}</span>
     Total <b>${money(bill.total)}</b> · ${dir === "in" ? "Received" : "Paid"} <b>${money(bill.paid)}</b> · Balance <b class="${bill.balance > 0.5 ? "pend" : "ok-ink"}">${money(Math.max(0, bill.balance))}</b>
-    ${list ? `<br><small class="muted">Payments: ${list}</small>` : ""}${bill.auto > 0.5 ? `<br><small class="muted">${money(bill.auto)} matched from payments not tied to a bill (oldest bills first).</small>` : ""}</div>`;
+    ${list ? `<br><small class="muted">Payments: ${list}</small>` : ""}${bill.advance > 0.5 ? `<br><small class="muted">${money(bill.advance)} adjusted from the advance against the order.</small>` : ""}${bill.auto > 0.5 ? `<br><small class="muted">${money(bill.auto)} matched from payments not tied to a bill (oldest bills first).</small>` : ""}</div>`;
 }

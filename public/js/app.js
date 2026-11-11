@@ -544,6 +544,13 @@ pages.docForm = async (type, id, preset = null) => {
         : `<small class="prog"><b class="ok-ink">✓ All ${DONE_WORD[type].toLowerCase()}</b></small>`);
     });
   };
+  if (doc.id && (type === "customer_po" || type === "purchase_order") && can("accounts"))
+    api("GET", `/api/orders/${doc.id}/advance`).then((a) => {
+      if (!a.total) return;
+      $("#links")?.insertAdjacentHTML("beforebegin", `<div class="card paystat"><span class="pill ok">Advance</span>
+        ${a.dir === "in" ? "Received" : "Paid"} <b>₹ ${money(a.total)}</b> · used against ${a.dir === "in" ? "invoices" : "bills"} <b>₹ ${money(a.used)}</b> · still to adjust <b class="pend">₹ ${money(a.left)}</b>
+        <br><small class="muted">${a.payments.map((x) => `${x.pay_date.split("-").reverse().join("/")} ${h(x.mode || "")} ${h(x.reference || "")} ₹ ${money(x.amount)}`).join(" · ")}</small></div>`);
+    }).catch(() => {});
   if (doc.id && type === "vendor_invoice" && can("accounts"))
     payStatus(api, "out", doc.id).then((html) => { $("#links")?.insertAdjacentHTML("beforebegin", `<div>${html}</div>`); }).catch(() => {});
   if (doc.id) linksPanel(api, "doc", doc.id, showProgress).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
@@ -630,6 +637,8 @@ function convertButtons(type, doc) {
     if (t === "invoice") { if (can("sales_invoice", "edit")) out.push(`<a class="btn primary" href="#/invoices/new?from=${doc.id}">🧾 Make Invoice</a>`); }
     else if (can(t, "edit")) out.push(`<a class="btn primary" href="#/d/${t}/new?from=${doc.id}">${DOC_TYPES[t].icon} Make ${h(DOC_TYPES[t].singular)}</a>`);
   }
+  if ((type === "customer_po" || type === "purchase_order") && can("accounts", "edit") && doc.party_id)
+    out.push(`<a class="btn" href="#/payments/new?dir=${type === "customer_po" ? "in" : "out"}&party=${doc.party_id}&order=${doc.id}">💰 Record advance</a>`);
   if (type === "vendor_invoice" && can("accounts", "edit") && doc.party_id)
     out.push(`<a class="btn" href="#/payments/new?dir=out&party=${doc.party_id}&bill=${doc.id}&ref=${encodeURIComponent(doc.doc_no || "")}">💰 Record payment</a>`);
   return out.join("");
