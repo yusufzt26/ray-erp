@@ -2,7 +2,7 @@ import { CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES
 import { readPdf } from "./pdfread.js";
 import { invoicePages } from "./invoice.js";
 import { morePages } from "./more.js";
-import { linksPanel } from "./links.js";
+import { linksPanel, payStatus } from "./links.js";
 import { docPrint } from "./docprint.js";
 import { ewayPage } from "./eway.js";
 import { DASHBOARDS, defaultDash, renderDash } from "./dash.js";
@@ -537,6 +537,8 @@ pages.docForm = async (type, id, preset = null) => {
         : `<small class="prog"><b class="ok-ink">✓ All ${DONE_WORD[type].toLowerCase()}</b></small>`);
     });
   };
+  if (doc.id && type === "vendor_invoice" && can("accounts"))
+    payStatus(api, "out", doc.id).then((html) => { $("#links")?.insertAdjacentHTML("beforebegin", `<div>${html}</div>`); }).catch(() => {});
   if (doc.id) linksPanel(api, "doc", doc.id, showProgress).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
 
   const tbody = $("#lines");
@@ -622,7 +624,7 @@ function convertButtons(type, doc) {
     else if (can(t, "edit")) out.push(`<a class="btn primary" href="#/d/${t}/new?from=${doc.id}">${DOC_TYPES[t].icon} Make ${h(DOC_TYPES[t].singular)}</a>`);
   }
   if (type === "vendor_invoice" && can("accounts", "edit") && doc.party_id)
-    out.push(`<a class="btn" href="#/payments/new?dir=out&party=${doc.party_id}&amount=${doc.total_amount || ""}&ref=${encodeURIComponent(doc.doc_no || "")}">💰 Record payment</a>`);
+    out.push(`<a class="btn" href="#/payments/new?dir=out&party=${doc.party_id}&bill=${doc.id}&ref=${encodeURIComponent(doc.doc_no || "")}">💰 Record payment</a>`);
   return out.join("");
 }
 

@@ -508,7 +508,12 @@ route("GET", "/api/invoices", async (c) => {
   let sql = `SELECT i.id, i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, i.po_no, i.total, i.status, cu.name AS customer
     FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id`;
   if (qs) { params.push(`%${qs}%`); sql += " WHERE i.inv_no ILIKE $1 OR i.po_no ILIKE $1 OR cu.name ILIKE $1"; }
-  return json({ rows: await q(sql + " ORDER BY i.id DESC", params) });
+  const rows = await q(sql + " ORDER BY i.id DESC", params);
+  if (c.perms.accounts !== "none") {
+    const st = Object.fromEntries((await billStatus("in")).rows.map((r) => [r.id, r]));
+    for (const r of rows) if (st[r.id]) { r.pay_status = st[r.id].pay_status; r.balance = st[r.id].balance; }
+  }
+  return json({ rows });
 });
 
 route("GET", "/api/invoices/options", async (c) => {
@@ -962,10 +967,9 @@ route("GET", "/api/dash/:view", async (c) => {
     out.topItems = await q(`SELECT COALESCE(p.name, l.description) AS label, SUM(l.amount) AS value, SUM(l.qty) AS qty FROM invoice_lines l
       JOIN invoices i ON i.id = l.invoice_id LEFT JOIN products p ON p.id = l.product_id
       WHERE i.status <> 'Cancelled' AND i.inv_date >= $1 GROUP BY 1 ORDER BY value DESC LIMIT 8`, [fyStart]);
-    const bills = await q(`SELECT i.customer_id AS party_id, cu.name, to_char(i.inv_date, 'YYYY-MM-DD') AS day, i.total AS amount
-      FROM invoices i JOIN customers cu ON cu.id = i.customer_id WHERE i.status <> 'Cancelled' ORDER BY i.inv_date, i.id`);
-    const paid = Object.fromEntries((await q("SELECT party_id, SUM(amount) AS s FROM payments WHERE direction = 'in' GROUP BY party_id")).map((r) => [String(r.party_id), Number(r.s)]));
-    const ag = aging(bills, paid, today);
+    const names = Object.fromEntries((await q("SELECT id, name FROM customers")).map((r) => [r.id, r.name]));
+    const bills = (await billStatus("in")).rows.map((b) => ({ party_id: b.party_id, name: names[b.party_id] || "", day: b.day, amount: b.balance }));
+    const ag = aging(bills, {}, today);
     out.recvAging = ag.buckets; out.recvParties = ag.parties.slice(0, 10);
     out.toCollect = ag.parties.reduce((t: number, p: any) => t + p.due, 0);
     out.openPOs = Number((await one("SELECT COUNT(*) AS n FROM documents WHERE doc_type = 'customer_po' AND status IN ('Open', 'Partly Dispatched')")).n);
@@ -984,10 +988,9 @@ route("GET", "/api/dash/:view", async (c) => {
     out.spendByCategory = await q(`SELECT COALESCE(p.category, 'Other') AS label, SUM(l.amount) AS value FROM document_lines l
       JOIN documents d ON d.id = l.document_id LEFT JOIN products p ON p.id = l.product_id
       WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled' AND d.doc_date >= $1 GROUP BY 1 ORDER BY value DESC`, [fyStart]);
-    const bills = await q(`SELECT d.party_id, v.name, to_char(COALESCE(d.doc_date, d.created_at::date), 'YYYY-MM-DD') AS day, COALESCE(d.total_amount, d.subtotal, 0) AS amount
-      FROM documents d JOIN vendors v ON v.id = d.party_id WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled' ORDER BY 3, d.id`);
-    const paid = Object.fromEntries((await q("SELECT party_id, SUM(amount) AS s FROM payments WHERE direction = 'out' GROUP BY party_id")).map((r) => [String(r.party_id), Number(r.s)]));
-    const ag = aging(bills, paid, today);
+    const names = Object.fromEntries((await q("SELECT id, name FROM vendors")).map((r) => [r.id, r.name]));
+    const bills = (await billStatus("out")).rows.map((b) => ({ party_id: b.party_id, name: names[b.party_id] || "", day: b.day, amount: b.balance }));
+    const ag = aging(bills, {}, today);
     out.payAging = ag.buckets; out.payParties = ag.parties.slice(0, 10);
     out.toPay = ag.parties.reduce((t: number, p: any) => t + p.due, 0);
     out.recentBills = await q(`SELECT id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_name, total_amount, status FROM documents
@@ -1225,7 +1228,56 @@ route("GET", "/api/accounts/statement/:dir/:id", async (c) => {
         FROM payments WHERE direction = $2 AND party_id = $1) x ORDER BY day, sort2`, [id, dir]);
   let bal = 0;
   for (const r of rows) { bal += Number(r.debit) - Number(r.credit); r.balance = Math.round(bal * 100) / 100; }
-  return json({ party, rows, balance: Math.round(bal * 100) / 100 });
+  const st = await billStatus(dir, id);
+  return json({ party, rows, balance: Math.round(bal * 100) / 100, bills: st.rows, advance: st.advance[id] || 0 });
+});
+
+// Bill-wise status: money tied to a bill counts first; the rest of a party's payments goes to its oldest open bills.
+async function billStatus(dir: "in" | "out", partyId: number | null = null) {
+  const bills = await q(dir === "in"
+    ? `SELECT id, inv_no AS ref, to_char(inv_date, 'YYYY-MM-DD') AS day, customer_id AS party_id, COALESCE(total, 0) AS total, po_no AS note
+        FROM invoices WHERE status <> 'Cancelled' AND ($1::int IS NULL OR customer_id = $1) ORDER BY inv_date, id`
+    : `SELECT id, COALESCE(doc_no, ref_no) AS ref, to_char(COALESCE(doc_date, created_at::date), 'YYYY-MM-DD') AS day, party_id,
+        COALESCE(total_amount, subtotal, 0) AS total, ref_no AS note
+        FROM documents WHERE doc_type = 'vendor_invoice' AND status <> 'Cancelled' AND ($1::int IS NULL OR party_id = $1) ORDER BY doc_date, id`, [partyId]);
+  const allocs = await q(`SELECT a.bill_id, SUM(a.amount) AS amt FROM payment_allocations a JOIN payments p ON p.id = a.payment_id
+    WHERE p.direction = $1 AND ($2::int IS NULL OR p.party_id = $2) GROUP BY a.bill_id`, [dir, partyId]);
+  const loose = await q(`SELECT p.party_id, SUM(p.amount - COALESCE(a.amt, 0)) AS amt FROM payments p
+    LEFT JOIN (SELECT payment_id, SUM(amount) AS amt FROM payment_allocations GROUP BY payment_id) a ON a.payment_id = p.id
+    WHERE p.direction = $1 AND ($2::int IS NULL OR p.party_id = $2) GROUP BY p.party_id`, [dir, partyId]);
+  const linked = Object.fromEntries(allocs.map((r) => [r.bill_id, Number(r.amt)]));
+  const free: Record<string, number> = Object.fromEntries(loose.map((r) => [r.party_id, Math.max(0, Number(r.amt))]));
+  const rows = bills.map((b) => {
+    const total = round2(Number(b.total));
+    const direct = round2(Math.min(total, linked[b.id] || 0));
+    const auto = round2(Math.min(total - direct, free[b.party_id] || 0));
+    free[b.party_id] = round2((free[b.party_id] || 0) - auto);
+    const paid = round2(direct + auto), balance = round2(total - paid);
+    return { ...b, total, direct, auto, paid, balance, pay_status: balance <= 0.5 ? "Paid" : paid > 0 ? "Part paid" : "Unpaid" };
+  });
+  return { rows, advance: free };
+}
+
+route("GET", "/api/bills/:dir", async (c) => {
+  const dir = c.params.dir === "out" ? "out" : "in";
+  if (c.perms.accounts === "none" && c.perms[dir === "in" ? "sales_invoice" : "vendor_invoice"] === "none") fail(403, "Not allowed");
+  const party = num(new URL(c.req.url).searchParams.get("party"));
+  const { rows, advance } = await billStatus(dir, party);
+  return json({ rows, advance: party ? advance[party] || 0 : null });
+});
+
+route("GET", "/api/bills/:dir/:id", async (c) => {
+  const dir = c.params.dir === "out" ? "out" : "in";
+  if (!c.user) fail(401, "Please log in.");
+  const id = Number(c.params.id);
+  const owner = dir === "in" ? await one("SELECT customer_id AS p FROM invoices WHERE id = $1", [id])
+    : await one("SELECT party_id AS p FROM documents WHERE id = $1 AND doc_type = 'vendor_invoice'", [id]);
+  if (!owner) fail(404, "Not found");
+  const { rows } = await billStatus(dir, owner.p);
+  const bill = rows.find((r) => r.id === id) || null;
+  const payments = await q(`SELECT p.id, to_char(p.pay_date, 'YYYY-MM-DD') AS pay_date, p.mode, p.reference, a.amount FROM payment_allocations a
+    JOIN payments p ON p.id = a.payment_id WHERE a.bill_id = $1 AND p.direction = $2 ORDER BY p.pay_date`, [id, dir]);
+  return json({ bill, payments });
 });
 
 route("GET", "/api/payments/options", async (c) => {
@@ -1239,7 +1291,10 @@ route("GET", "/api/payments/options", async (c) => {
 route("GET", "/api/payments", async (c) => {
   require(c, "accounts");
   const rows = await q(`SELECT p.id, p.direction, to_char(p.pay_date, 'YYYY-MM-DD') AS pay_date, p.amount, p.mode, p.reference, p.notes, p.party_id,
-      CASE WHEN p.direction = 'in' THEN cu.name ELSE v.name END AS party
+      CASE WHEN p.direction = 'in' THEN cu.name ELSE v.name END AS party,
+      (SELECT string_agg(CASE WHEN p.direction = 'in' THEN i.inv_no ELSE COALESCE(d.doc_no, d.ref_no) END, ', ')
+        FROM payment_allocations a LEFT JOIN invoices i ON p.direction = 'in' AND i.id = a.bill_id
+        LEFT JOIN documents d ON p.direction = 'out' AND d.id = a.bill_id WHERE a.payment_id = p.id) AS against
     FROM payments p LEFT JOIN customers cu ON p.direction = 'in' AND cu.id = p.party_id LEFT JOIN vendors v ON p.direction = 'out' AND v.id = p.party_id
     ORDER BY p.pay_date DESC, p.id DESC LIMIT 300`);
   return json({ rows });
@@ -1255,9 +1310,25 @@ route("POST", "/api/payments", async (c) => {
   if (!amount || amount <= 0) fail(400, "Enter the amount.");
   const exists = await one(`SELECT id FROM ${dir === "in" ? "customers" : "vendors"} WHERE id = $1`, [partyId]);
   if (!exists) fail(400, "Party not found.");
-  const row = await one("INSERT INTO payments (direction, party_id, pay_date, amount, mode, reference, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
-    [dir, partyId, day, amount, str(b.mode) || null, str(b.reference) || null, str(b.notes) || null, c.user!.id]);
-  return json({ id: row.id });
+  const allocs = (Array.isArray(b.allocations) ? b.allocations : [])
+    .map((a: any) => ({ bill_id: num(a.bill_id), amount: round2(num(a.amount) || 0) })).filter((a: any) => a.bill_id && a.amount > 0);
+  const tied = round2(allocs.reduce((t: number, a: any) => t + a.amount, 0));
+  if (tied > amount + 0.01) fail(400, `The bills ticked add up to ₹ ${tied}, more than the payment of ₹ ${amount}.`);
+  if (allocs.length) {
+    const { rows } = await billStatus(dir, partyId);
+    for (const a of allocs) {
+      const bill = rows.find((r) => r.id === a.bill_id) || fail(400, "One of the bills does not belong to this party.");
+      const open = round2(bill.total - bill.direct);
+      if (a.amount > open + 0.01) fail(400, `Bill ${bill.ref} has only ₹ ${open} left to settle.`);
+    }
+  }
+  const id = await tx(async (query) => {
+    const row = (await query("INSERT INTO payments (direction, party_id, pay_date, amount, mode, reference, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+      [dir, partyId, day, amount, str(b.mode) || null, str(b.reference) || null, str(b.notes) || null, c.user!.id]))[0];
+    for (const a of allocs) await query("INSERT INTO payment_allocations (payment_id, bill_id, amount) VALUES ($1, $2, $3)", [row.id, a.bill_id, a.amount]);
+    return row.id;
+  });
+  return json({ id });
 });
 
 route("DELETE", "/api/payments/:id", async (c) => {

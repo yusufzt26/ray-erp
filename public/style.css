@@ -285,3 +285,7 @@ table.grid.mini td { white-space: normal; }
 .pend { color: #b86b00; } .ok-ink { color: #2e7d4f; }
 
 .lines small.prog { display: block; white-space: nowrap; font-size: .78rem; line-height: 1.25; margin-top: 2px; }
+
+.pill.ok { background: var(--ok); color: var(--ok-ink); } .pill.warn { background: #fdf0d5; color: #8a5a00; }
+.paystat { display: block; padding: .7rem 1rem; margin-bottom: .8rem; } .paystat .pill { margin-right: .5rem; }
+#bills input[name=pay] { width: 130px; text-align: right; }

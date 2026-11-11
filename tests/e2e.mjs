@@ -133,12 +133,29 @@ ok(dl2.suggestedFilename().startsWith("sales_register_"), "sales register excel"
 // accounts
 await p.goto(U + "/#/accounts"); await p.waitForSelector("text=To collect from customers");
 ok((await p.textContent("main")).includes("1,33,517.00"), "receivable shows invoice total");
-await p.goto(U + "/#/payments/new?dir=in&party=1"); await p.waitForSelector("text=Outstanding now");
+await p.goto(U + "/#/payments/new?dir=in&party=1"); await p.waitForSelector("text=Which invoices does this payment settle");
 await p.fill("[name=amount]", "33517"); await p.fill("[name=reference]", "UTR123");
 await p.click("button:has-text('Save payment')");
 await p.waitForSelector("text=Payment saved");
 ok((await p.textContent("main")).includes("1,00,000.00"), "statement balance after payment");
 await p.screenshot({ path: join(SHOTS, "statement.png"), fullPage: true });
+{
+  ok((await p.textContent("main")).includes("Invoice-wise status") && /Part paid|Paid/.test(await p.textContent("main")), "statement shows invoice-wise paid status");
+  const bj = async () => p.evaluate(async () => (await fetch("/api/bills/in?party=1")).json());
+  const before = (await bj()).rows;
+  const target = before.filter((b) => b.balance > 0.5).pop();
+  await p.goto(U + `/#/payments/new?dir=in&party=1&bill=${target.id}&ref=${encodeURIComponent(target.ref)}`);
+  await p.waitForSelector(`tr[data-id="${target.id}"] [name=tick]:checked`);
+  ok(Number(await p.inputValue("[name=amount]")) === target.balance, "payment from an invoice pre-fills its balance");
+  await p.screenshot({ path: join(SHOTS, "payment_bills.png"), fullPage: true });
+  await p.click("button:has-text('Save payment')"); await p.waitForSelector("text=Payment saved");
+  const after = (await bj()).rows.find((b) => b.id === target.id);
+  ok(after.pay_status === "Paid" && after.direct === target.balance, "payment tied to the invoice marks it Paid");
+  await p.goto(U + "/#/invoices"); await p.waitForSelector("text=Balance");
+  ok((await p.textContent("main")).includes("Paid"), "invoice list shows payment status");
+  await p.goto(U + "/#/payments"); await p.waitForSelector("text=Against");
+  ok((await p.textContent("main")).includes(target.ref) && (await p.textContent("main")).includes("On account"), "payments list shows which invoice was paid");
+}
 await p.goto(U + "/#/accounts?tab=pay"); await p.waitForSelector("text=To pay to vendors");
 ok((await p.textContent("main")).includes("Polytube"), "payable lists vendor");
 await p.screenshot({ path: join(SHOTS, "accounts.png"), fullPage: true });

@@ -7,6 +7,7 @@ const qtyFmt = (n) => Number(n || 0).toLocaleString("en-IN", { maximumFractionDi
 const dmy = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 const r2 = (n) => Math.round(n * 100) / 100;
+const num = (v) => { const n = parseFloat(String(v ?? "").replace(/,/g, "")); return Number.isNaN(n) ? 0 : n; };
 const params = () => new URLSearchParams(location.hash.split("?")[1] || "");
 const fyStart = () => { const d = new Date(); const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; return `${y}-04-01`; };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -272,7 +273,7 @@ export function morePages(ctx) {
   }
 
   async function statement(dir, id) {
-    const { party, rows, balance } = await api("GET", `/api/accounts/statement/${dir}/${id}`);
+    const { party, rows, balance, bills, advance } = await api("GET", `/api/accounts/statement/${dir}/${id}`);
     const editable = can("accounts", "edit");
     layout(`
       <div class="head"><h1>${h(party.name)} <small>${h(party.code)}</small></h1>
@@ -287,6 +288,16 @@ export function morePages(ctx) {
         ${rows.map((r) => `<tr ${r.href ? `class="click" data-href="${r.href}"` : ""}><td>${dmy(r.day)}</td><td>${h(r.kind)}</td><td>${h(r.ref)}</td><td>${h(r.notes)}</td>
           <td class="num">${Number(r.debit) ? money(r.debit) : ""}</td><td class="num">${Number(r.credit) ? money(r.credit) : ""}</td><td class="num"><b>${money(r.balance)}</b></td></tr>`).join("")
           || '<tr><td colspan="7" class="muted">No entries yet.</td></tr>'}
+      </table></div>
+      <h2>${dir === "in" ? "Invoice" : "Bill"}-wise status</h2>
+      <p class="muted small">Payments tied to a ${dir === "in" ? "invoice" : "bill"} count there first; the rest is used for the oldest open ones.${advance > 0.5 ? ` Advance not yet used: <b>₹ ${money(advance)}</b>.` : ""}</p>
+      <div class="scroll"><table class="grid">
+        <tr><th>${dir === "in" ? "Invoice" : "Bill"}</th><th>Date</th><th class="num">Total</th><th class="num">Paid</th><th class="num">Balance</th><th>Status</th>${editable ? "<th></th>" : ""}</tr>
+        ${bills.map((b) => `<tr><td><a href="${dir === "in" ? `#/invoices/${b.id}` : `#/d/vendor_invoice/${b.id}`}"><b>${h(b.ref)}</b></a></td><td>${dmy(b.day)}</td>
+          <td class="num">${money(b.total)}</td><td class="num">${b.paid ? money(b.paid) : ""}</td><td class="num"><b>${b.balance > 0.5 ? money(b.balance) : ""}</b></td>
+          <td><span class="pill ${b.pay_status === "Paid" ? "ok" : b.pay_status === "Part paid" ? "warn" : ""}">${h(b.pay_status)}</span></td>
+          ${editable ? `<td>${b.balance > 0.5 ? `<a class="btn small" href="#/payments/new?dir=${dir}&party=${party.id}&bill=${b.id}&ref=${encodeURIComponent(b.ref)}">Pay</a>` : ""}</td>` : ""}</tr>`).join("")
+          || `<tr><td colspan="7" class="muted">No ${dir === "in" ? "invoices" : "bills"}.</td></tr>`}
       </table></div>`);
     $("#exx").onclick = () => saveSheets(`statement_${party.code || party.id}.xlsx`, [["Statement", [[party.name], [],
       ["Date", "Entry", "Ref", "Note", "Invoice", dir === "in" ? "Received" : "Paid", "Balance"],
@@ -301,11 +312,11 @@ export function morePages(ctx) {
         <div class="actions"><a class="btn" href="#/accounts">← Accounts</a>
           ${editable ? `<a class="btn primary" href="#/payments/new?dir=in">＋ Payment received</a><a class="btn primary" href="#/payments/new?dir=out">＋ Payment made</a>` : ""}</div></div>
       <div class="scroll"><table class="grid">
-        <tr><th>Date</th><th>Type</th><th>Party</th><th>Mode</th><th>Reference</th><th class="num">Amount</th><th>Note</th>${editable ? "<th></th>" : ""}</tr>
+        <tr><th>Date</th><th>Type</th><th>Party</th><th>Mode</th><th>Reference</th><th class="num">Amount</th><th>Against</th><th>Note</th>${editable ? "<th></th>" : ""}</tr>
         ${rows.map((r) => `<tr class="click" data-href="#/accounts/${r.direction}/${r.party_id}"><td>${dmy(r.pay_date)}</td><td>${r.direction === "in" ? "⬇ Received" : "⬆ Paid"}</td>
-          <td>${h(r.party)}</td><td>${h(r.mode)}</td><td>${h(r.reference)}</td><td class="num">${money(r.amount)}</td><td>${h(r.notes)}</td>
+          <td>${h(r.party)}</td><td>${h(r.mode)}</td><td>${h(r.reference)}</td><td class="num">${money(r.amount)}</td><td>${h(r.against || "On account")}</td><td>${h(r.notes)}</td>
           ${editable ? `<td><button class="btn small" data-del="${r.id}">Delete</button></td>` : ""}</tr>`).join("")
-          || '<tr><td colspan="8" class="muted">No payments entered yet.</td></tr>'}
+          || '<tr><td colspan="9" class="muted">No payments entered yet.</td></tr>'}
       </table></div>`);
     $$("[data-del]").forEach((b) => confirmButton(b, async () => { await api("DELETE", `/api/payments/${b.dataset.del}`); flash("Payment deleted."); route(); }));
   }
@@ -314,44 +325,97 @@ export function morePages(ctx) {
     if (!can("accounts", "edit")) return ctx.forbidden();
     const p = params();
     const dir = p.get("dir") === "out" ? "out" : "in";
-    const [opts, sum] = await Promise.all([api("GET", "/api/payments/options"), api("GET", "/api/accounts/summary")]);
+    const opts = await api("GET", "/api/payments/options");
     const parties = dir === "in" ? opts.customers : opts.vendors;
-    const bal = Object.fromEntries((dir === "in" ? sum.receivable : sum.payable).map((r) => [r.id, Number(r.balance)]));
     layout(`
       <div class="head"><h1>${dir === "in" ? "⬇ Payment received from customer" : "⬆ Payment made to vendor"}</h1>
         <div class="actions"><a class="btn" href="#/accounts${dir === "out" ? "?tab=pay" : ""}">← Accounts</a></div></div>
       <div id="err"></div>
-      <form id="f" class="card narrow2">
+      <form id="f" class="card">
         <div class="form-grid">
           <label class="full">${dir === "in" ? "Customer" : "Vendor"} <span class="req">*</span>
             <select name="party_id" required><option value="">— pick —</option>
-              ${parties.map((x) => `<option value="${x.id}" ${p.get("party") === String(x.id) ? "selected" : ""}>${h(x.name)} (${h(x.code)})</option>`).join("")}</select>
-            <small id="due"></small></label>
+              ${parties.map((x) => `<option value="${x.id}" ${p.get("party") === String(x.id) ? "selected" : ""}>${h(x.name)} (${h(x.code)})</option>`).join("")}</select></label>
           <label>Date <span class="req">*</span><input type="date" name="pay_date" value="${today()}" required></label>
           <label>Amount (₹) <span class="req">*</span><input name="amount" inputmode="decimal" required value="${h(p.get("amount") || "")}"></label>
           <label>Mode <select name="mode">${["NEFT", "RTGS", "Cheque", "UPI", "Cash", "Other"].map((m) => `<option>${m}</option>`).join("")}</select></label>
           <label>Reference <input name="reference" placeholder="UTR / cheque no"></label>
           <label class="full">Note <input name="notes" value="${p.get("ref") ? `Against ${h(p.get("ref"))}` : ""}"></label>
         </div>
+        <div id="bills"></div>
         <div class="buttons"><button class="btn primary">Save payment</button></div>
       </form>`);
-    const showDue = () => {
-      const v = $("#f").party_id.value;
-      $("#due").innerHTML = v ? `Outstanding now: <b>₹ ${money(bal[v] || 0)}</b> <a href="#" id="fill">use this amount</a>` : "";
-      const fill = $("#fill");
-      if (fill) fill.onclick = (e) => { e.preventDefault(); $("#f").amount.value = r2(Math.max(0, bal[v] || 0)); };
+    const form = $("#f");
+    let bills = [];
+    let amountTyped = !!p.get("amount") && !p.get("bill");
+    form.amount.addEventListener("input", () => { amountTyped = true; summary(); });
+    const inputs = () => $$("#bills input[name=pay]");
+    const tied = () => r2(inputs().reduce((t, i) => t + num(i.value), 0));
+    const summary = () => {
+      const s = $("#alloc");
+      if (!s) return;
+      const amt = num(form.amount.value), t = tied(), rest = r2(amt - t);
+      s.innerHTML = `Against bills: <b>₹ ${money(t)}</b> · ${rest >= 0 ? `On account (advance): <b>₹ ${money(rest)}</b>` : `<b class="neg">₹ ${money(-rest)} more than the payment amount</b>`}`;
     };
-    $("#f").party_id.onchange = showDue; showDue();
-    $("#f").onsubmit = async (e) => {
+    const syncAmount = () => { if (!amountTyped) form.amount.value = tied() ? tied() : ""; summary(); };
+    const loadBills = async () => {
+      const party = form.party_id.value;
+      if (!party) { $("#bills").innerHTML = ""; return; }
+      const r = await api("GET", `/api/bills/${dir}?party=${party}`);
+      bills = r.rows.filter((x) => x.balance > 0.5);
+      const pre = p.get("bill");
+      $("#bills").innerHTML = `
+        <h2>Which ${dir === "in" ? "invoices" : "bills"} does this payment settle?</h2>
+        ${bills.length ? `<p class="muted small">Tick the ${dir === "in" ? "invoices" : "bills"} being paid. You can pay part of one by changing the amount.
+          Anything not tied to a ${dir === "in" ? "invoice" : "bill"} is kept as an advance and used for the oldest open ones.</p>
+        <div class="scroll"><table class="grid">
+          <tr><th></th><th>${dir === "in" ? "Invoice" : "Bill"}</th><th>Date</th><th class="num">Total</th><th class="num">Paid so far</th><th class="num">Balance</th><th class="num">Pay now</th></tr>
+          ${bills.map((x) => `<tr data-id="${x.id}"><td><input type="checkbox" name="tick" ${String(x.id) === pre ? "checked" : ""}></td>
+            <td><b>${h(x.ref)}</b></td><td>${dmy(x.day)}</td><td class="num">${money(x.total)}</td><td class="num">${x.paid ? money(x.paid) : ""}</td>
+            <td class="num"><b>${money(x.balance)}</b></td>
+            <td class="num"><input name="pay" inputmode="decimal" class="qty" value="${String(x.id) === pre ? x.balance : ""}"></td></tr>`).join("")}
+        </table></div>
+        <div class="buttons"><button type="button" class="btn small" id="oldest">Settle oldest first from the amount</button>
+          <button type="button" class="btn small" id="clear">Clear</button></div>`
+        : `<p class="muted">No open ${dir === "in" ? "invoices" : "bills"} for this party. The payment will be kept as an advance.</p>`}
+        <p id="alloc"></p>`;
+      $$("#bills tr[data-id]").forEach((tr) => {
+        const x = bills.find((b) => String(b.id) === tr.dataset.id);
+        const tick = $("[name=tick]", tr), pay = $("[name=pay]", tr);
+        tick.onchange = () => { pay.value = tick.checked ? x.balance : ""; syncAmount(); };
+        pay.oninput = () => { tick.checked = num(pay.value) > 0; syncAmount(); };
+      });
+      const oldest = $("#oldest");
+      if (oldest) oldest.onclick = () => {
+        let left = num(form.amount.value);
+        $$("#bills tr[data-id]").forEach((tr) => {
+          const x = bills.find((b) => String(b.id) === tr.dataset.id);
+          const use = r2(Math.min(left, x.balance));
+          left = r2(left - use);
+          $("[name=pay]", tr).value = use > 0 ? use : "";
+          $("[name=tick]", tr).checked = use > 0;
+        });
+        amountTyped = true; summary();
+      };
+      const clear = $("#clear");
+      if (clear) clear.onclick = () => { inputs().forEach((i) => (i.value = "")); $$("#bills [name=tick]").forEach((t) => (t.checked = false)); syncAmount(); };
+      if (pre && !amountTyped) syncAmount(); else summary();
+    };
+    form.party_id.onchange = () => { p.delete("bill"); loadBills(); };
+    await loadBills();
+    form.onsubmit = async (e) => {
       e.preventDefault();
       const btn = $("button.primary", e.target);
       busy(btn, true, "Saving…");
       try {
-        const body = { ...Object.fromEntries(new FormData(e.target)), direction: dir };
+        const fd = new FormData(e.target);
+        const body = { party_id: fd.get("party_id"), pay_date: fd.get("pay_date"), amount: fd.get("amount"), mode: fd.get("mode"),
+          reference: fd.get("reference"), notes: fd.get("notes"), direction: dir,
+          allocations: $$("#bills tr[data-id]").map((tr) => ({ bill_id: Number(tr.dataset.id), amount: num($("[name=pay]", tr).value) })).filter((a) => a.amount > 0) };
         await api("POST", "/api/payments", body);
         flash("Payment saved.");
         location.hash = `#/accounts/${dir}/${body.party_id}`;
-      } catch (err) { $("#err").innerHTML = errorBox([err.message]); busy(btn, false); }
+      } catch (err) { $("#err").innerHTML = errorBox([err.message]); busy(btn, false); scrollTo(0, 0); }
     };
   }
 

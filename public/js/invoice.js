@@ -52,6 +52,7 @@ function billToFor(c) {
 
 import { linksPanel } from "./links.js";
 import { fitPages } from "./printfit.js";
+import { payStatus } from "./links.js";
 
 // ---------------------------------------------------------------- pages
 export function invoicePages(ctx) {
@@ -65,9 +66,10 @@ export function invoicePages(ctx) {
         <div class="actions">${can("sales_invoice", "edit") ? '<a class="btn primary" href="#/invoices/new">＋ New Invoice</a>' : ""}</div></div>
       <form class="filters" id="flt"><input name="q" value="${h(qs)}" placeholder="Search invoice no, PO no or customer…"><button class="btn">Search</button></form>
       <div class="scroll"><table class="grid">
-        <tr><th>Invoice No</th><th>Date</th><th>Customer</th><th>PO No</th><th class="num">Grand Total</th><th>Status</th></tr>
+        <tr><th>Invoice No</th><th>Date</th><th>Customer</th><th>PO No</th><th class="num">Grand Total</th><th>Status</th>${rows.some((r) => r.pay_status) ? '<th>Payment</th><th class="num">Balance</th>' : ""}</tr>
         ${rows.map((r) => `<tr class="click ${r.status === "Cancelled" ? "inactive" : ""}" data-href="#/invoices/${r.id}"><td><b>${h(r.inv_no)}</b></td>
-          <td>${dmy(r.inv_date)}</td><td>${h(r.customer)}</td><td>${h(r.po_no)}</td><td class="num">${money(r.total)}</td><td><span class="pill">${h(r.status)}</span></td></tr>`).join("")
+          <td>${dmy(r.inv_date)}</td><td>${h(r.customer)}</td><td>${h(r.po_no)}</td><td class="num">${money(r.total)}</td><td><span class="pill">${h(r.status)}</span></td>
+          ${r.pay_status ? `<td><span class="pill ${r.pay_status === "Paid" ? "ok" : r.pay_status === "Part paid" ? "warn" : ""}">${h(r.pay_status)}</span></td><td class="num">${r.balance > 0.5 ? money(r.balance) : ""}</td>` : rows.some((x) => x.pay_status) ? "<td></td><td></td>" : ""}</tr>`).join("")
           || '<tr><td colspan="6" class="muted">No invoices yet. Open a Customer PO and press "Make Invoice", or press "New Invoice".</td></tr>'}
       </table></div>`);
     $("#flt").onsubmit = (e) => { e.preventDefault(); location.hash = "#/invoices?" + new URLSearchParams(new FormData(e.target)); };
@@ -112,7 +114,8 @@ export function invoicePages(ctx) {
       <div class="head"><h1>${id ? `Invoice <span class="code">${h(inv.inv_no)}</span>` : `New Sales Invoice <span class="code" id="next_no"></span>`}</h1>
         <div class="actions">${id ? `<a class="btn primary" href="#/invoices/${id}/print">🖨 Print</a>` : ""}
           ${id && inv.status !== "Cancelled" ? `<a class="btn" href="#/eway/invoice/${id}">🚛 E-way bill${inv.eway?.ewb_no ? " ✓" : ""}</a>` : ""}
-          ${id && can("accounts", "edit") && inv.status !== "Cancelled" ? `<a class="btn" href="#/payments/new?dir=in&party=${inv.customer_id}&amount=${inv.total}&ref=${encodeURIComponent(inv.inv_no)}">💰 Record payment</a>` : ""}<a class="btn" href="#/invoices">← Back</a></div></div>
+          ${id && can("accounts", "edit") && inv.status !== "Cancelled" ? `<a class="btn" href="#/payments/new?dir=in&party=${inv.customer_id}&bill=${id}&ref=${encodeURIComponent(inv.inv_no)}">💰 Record payment</a>` : ""}<a class="btn" href="#/invoices">← Back</a></div></div>
+      <div id="paystat"></div>
       <div id="err"></div>
       <form id="f">
       <fieldset ${ed ? "" : "disabled"}>
@@ -166,6 +169,7 @@ export function invoicePages(ctx) {
       </form>
       <div id="links"></div>
       ${id && ctx.S.user.role === "Admin" ? '<button class="btn danger small" id="del">Delete invoice</button>' : ""}`);
+    if (id && can("accounts")) payStatus(api, "in", id).then((html) => { if ($("#paystat")) $("#paystat").innerHTML = html; }).catch(() => {});
     if (id) linksPanel(api, "invoice", id).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
 
     const tbody = $("#lines"), boxes = $("#boxes");
