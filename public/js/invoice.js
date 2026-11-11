@@ -108,7 +108,7 @@ export function invoicePages(ctx) {
     const ed = can("sales_invoice", "edit");
     const custOpt = (c) => `<option value="${c.id}" ${String(inv.customer_id) === String(c.id) ? "selected" : ""}>${h(c.name)} (${h(c.code)})</option>`;
     layout(`
-      <div class="head"><h1>${id ? `Invoice <span class="code">${h(inv.inv_no)}</span>` : "New Sales Invoice"}</h1>
+      <div class="head"><h1>${id ? `Invoice <span class="code">${h(inv.inv_no)}</span>` : `New Sales Invoice <span class="code" id="next_no"></span>`}</h1>
         <div class="actions">${id ? `<a class="btn primary" href="#/invoices/${id}/print">🖨 Print</a>` : ""}
           ${id && inv.status !== "Cancelled" ? `<a class="btn" href="#/eway/invoice/${id}">🚛 E-way bill${inv.eway?.ewb_no ? " ✓" : ""}</a>` : ""}
           ${id && can("accounts", "edit") && inv.status !== "Cancelled" ? `<a class="btn" href="#/payments/new?dir=in&party=${inv.customer_id}&amount=${inv.total}&ref=${encodeURIComponent(inv.inv_no)}">💰 Record payment</a>` : ""}<a class="btn" href="#/invoices">← Back</a></div></div>
@@ -122,7 +122,7 @@ export function invoicePages(ctx) {
         <div class="form-grid">
           <label>Customer <span class="req">*</span><select name="customer_id" id="customer_id" required><option value="">— pick —</option>${customers.map(custOpt).join("")}</select></label>
           <label>Invoice date <span class="req">*</span><input type="date" name="inv_date" value="${h(inv.inv_date)}" required>
-            <small>${id ? "" : "Invoice number is given automatically when you save"}</small></label>
+            <small id="next_note">${id ? "" : "Invoice number is given automatically when you save"}</small></label>
           <label>PO Number<input name="po_no" value="${h(inv.po_no)}"></label>
           <label>PO Date<input type="date" name="po_date" value="${h(inv.po_date)}"></label>
           <label>Supplier Code<input name="supplier_code" value="${h(inv.supplier_code)}"><small>Our code at this customer</small></label>
@@ -248,6 +248,17 @@ export function invoicePages(ctx) {
     packing.forEach(addBox);
     renumber();
 
+    if (!id) {
+      const showNext = async () => {
+        try {
+          const r = await api("GET", `/api/invoice-next?date=${$("#f").inv_date.value}`);
+          $("#next_no").textContent = r.inv_no;
+          $("#next_note").innerHTML = `This invoice will be <b>${h(r.inv_no)}</b> when you save`;
+        } catch { /* keep the plain note */ }
+      };
+      $("#f").inv_date.addEventListener("change", showNext);
+      showNext();
+    }
     $("#f").onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);

@@ -638,6 +638,15 @@ route("DELETE", "/api/invoices/:id", async (c) => {
   return json({ message: "Invoice deleted." + reuse });
 });
 
+route("GET", "/api/invoice-next", async (c) => {
+  require(c, "sales_invoice");
+  const day = isoDate(new URL(c.req.url).searchParams.get("date")) || new Date().toISOString().slice(0, 10);
+  const fy = fyOf(day);
+  const prefix = (await one("SELECT value FROM settings WHERE key = 'invoice_prefix'"))?.value || "R";
+  const cur = Number((await one("SELECT value FROM counters WHERE name = $1", [`invoice_${fy}`]))?.value || 0);
+  return json({ inv_no: `${prefix}/${fy}-${String(cur + 1).padStart(3, "0")}` });
+});
+
 route("GET", "/api/invoice-counter", async (c) => {
   if (!c.user) fail(401, "Please log in.");
   return json({ rows: await q("SELECT name, value FROM counters WHERE name LIKE 'invoice_%' ORDER BY name") });

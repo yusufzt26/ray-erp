@@ -239,6 +239,9 @@ ok(Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance) === r
   ok(/next invoice will be R\/26-007/.test(res.message || ""), "deleting the last invoice gives its number back");
   const c = (await getJ("/api/invoice-counter")).rows.find((r) => r.name === "invoice_26");
   ok(Number(c.value) === 6, "invoice counter back to 6");
+  await p.goto(U + "/#/invoices/new"); await p.waitForSelector("text=New Sales Invoice");
+  await p.waitForFunction(() => document.querySelector("#next_no")?.textContent === "R/26-007");
+  ok((await p.textContent("#next_note")).includes("R/26-007"), "new invoice shows the number it will get");
 }
 
 // users + roles
