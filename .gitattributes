@@ -1,0 +1,3 @@
+# Database migrations were first applied from a Windows checkout (CRLF line endings).
+# Netlify checks they never change, so keep their bytes exactly as committed.
+netlify/database/migrations/*.sql -text
