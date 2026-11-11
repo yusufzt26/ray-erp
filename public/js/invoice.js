@@ -50,6 +50,8 @@ function billToFor(c) {
   return [c.name, c.address, cityLine, c.contact_person ? `Kind Attn : ${c.contact_person}${c.phone ? " - " + c.phone : ""}` : ""].filter(Boolean).join("\n");
 }
 
+import { linksPanel } from "./links.js";
+
 // ---------------------------------------------------------------- pages
 export function invoicePages(ctx) {
   const { api, layout, can, flash, $, $$, errorBox, busy } = ctx;
@@ -94,7 +96,8 @@ export function invoicePages(ctx) {
     let inv = { inv_date: today(), gst_rate: 18, tax_type: "", status: "Issued" };
     let lines = [];
     let packing = [];
-    const fromPo = new URLSearchParams(location.hash.split("?")[1] || "").get("po");
+    const qp = new URLSearchParams(location.hash.split("?")[1] || "");
+    const fromPo = qp.get("from") || qp.get("po");
     if (id) {
       const r = await api("GET", `/api/invoices/${id}`);
       inv = r.inv; lines = r.lines; packing = JSON.parse(inv.packing || "[]");
@@ -106,7 +109,8 @@ export function invoicePages(ctx) {
     const custOpt = (c) => `<option value="${c.id}" ${String(inv.customer_id) === String(c.id) ? "selected" : ""}>${h(c.name)} (${h(c.code)})</option>`;
     layout(`
       <div class="head"><h1>${id ? `Invoice <span class="code">${h(inv.inv_no)}</span>` : "New Sales Invoice"}</h1>
-        <div class="actions">${id ? `<a class="btn primary" href="#/invoices/${id}/print">🖨 Print</a>` : ""}<a class="btn" href="#/invoices">← Back</a></div></div>
+        <div class="actions">${id ? `<a class="btn primary" href="#/invoices/${id}/print">🖨 Print</a>` : ""}
+          ${id && can("accounts", "edit") && inv.status !== "Cancelled" ? `<a class="btn" href="#/payments/new?dir=in&party=${inv.customer_id}&amount=${inv.total}&ref=${encodeURIComponent(inv.inv_no)}">💰 Record payment</a>` : ""}<a class="btn" href="#/invoices">← Back</a></div></div>
       <div id="err"></div>
       <form id="f">
       <fieldset ${ed ? "" : "disabled"}>
@@ -151,13 +155,16 @@ export function invoicePages(ctx) {
         <table class="lines"><thead><tr><th>Box</th><th>Item line</th><th>Qty in box</th><th></th></tr></thead><tbody id="boxes"></tbody></table>
         ${ed ? '<button type="button" class="btn small" id="addbox">＋ Add box</button> <button type="button" class="btn small" id="autobox">Fill boxes automatically…</button>' : ""}
       </div>
-      ${inv.customer_po_id || fromPo ? `<input type="hidden" name="customer_po_id" value="${h(inv.customer_po_id || fromPo)}">
-        ${id ? "" : `<div class="card"><label>After saving, mark the Customer PO as
-          <select name="po_status"><option value="">leave as it is</option><option selected>Partly Dispatched</option><option>Completed</option></select></label></div>`}` : ""}
+      ${inv.customer_po_id ? `<input type="hidden" name="customer_po_id" value="${h(inv.customer_po_id)}">
+        ${id ? "" : `<div class="card"><label>After saving, mark the Sales Order as
+          <select name="po_status"><option value="" selected>Work it out from the quantities (recommended)</option><option>Partly Dispatched</option><option>Completed</option></select></label></div>`}` : ""}
+      ${inv.challan_id ? `<input type="hidden" name="challan_id" value="${h(inv.challan_id)}">` : ""}
       </fieldset>
       ${ed ? `<div class="buttons sticky-save"><button class="btn primary big">💾 Save invoice</button></div>` : ""}
       </form>
+      <div id="links"></div>
       ${id && ctx.S.user.role === "Admin" ? '<button class="btn danger small" id="del">Delete invoice</button>' : ""}`);
+    if (id) linksPanel(api, "invoice", id).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
 
     const tbody = $("#lines"), boxes = $("#boxes");
     const customer = () => customers.find((c) => String(c.id) === $("#customer_id").value);
@@ -270,11 +277,11 @@ export function invoicePages(ctx) {
   }
 
   async function poToInvoice(poId, customers) {
-    const { po, lines } = await api("GET", `/api/invoices/from-po/${poId}`);
-    const c = customers.find((c) => c.id === po.party_id);
+    const { po, lines, challan, party_id } = await api("GET", `/api/invoices/from-doc/${poId}`);
+    const c = customers.find((c) => c.id === party_id);
     const rates = lines.map((l) => l.gst_rate).filter((r) => r !== null && r !== undefined);
     return {
-      customer_id: po.party_id, customer_po_id: po.id, po_no: po.doc_no, po_date: po.doc_date,
+      customer_id: party_id, customer_po_id: po.id, challan_id: challan?.id || null, po_no: po.doc_no, po_date: po.doc_date,
       supplier_code: c?.supplier_code || "", gstin: c?.gstin || po.party_gstin || "", pan: c?.pan || "",
       bill_to: billToFor(c) || po.party_name, ship_to: c?.ship_to || billToFor(c) || po.party_name,
       delivery_condition: c?.delivery_condition || "", payment_terms: c?.payment_terms || "",

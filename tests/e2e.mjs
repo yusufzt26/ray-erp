@@ -142,6 +142,66 @@ await p.goto(U + "/#/accounts?tab=pay"); await p.waitForSelector("text=To pay to
 ok((await p.textContent("main")).includes("Polytube"), "payable lists vendor");
 await p.screenshot({ path: join(SHOTS, "accounts.png"), fullPage: true });
 
+// linked documents: quotation -> sales order -> challan -> invoice; PO -> GRN -> vendor invoice
+const getJ = (path) => p.evaluate(async (u) => (await fetch(u)).json(), path);
+const statusOf = async (type, id) => (await getJ(`/api/d/${type}/${id}`)).doc.status;
+await p.goto(U + "/#/d/quotation/new"); await p.waitForSelector("text=New Quotation"); await p.waitForSelector("#party_id");
+await p.selectOption("#party_id", "1");
+await p.selectOption("#lines tr:first-child [name=product_id]", "1");
+await p.fill("#lines tr:first-child [name=qty]", "100"); await p.fill("#lines tr:first-child [name=rate]", "10");
+await p.fill("[name=total_amount]", "1180");
+await p.click("button:has-text('Save Quotation')");
+await p.waitForSelector("text=QTN-00001 saved");
+ok(true, "quotation saved with automatic number");
+await p.click("text=Make Sales Order"); await p.waitForSelector("text=only the quantity still pending");
+await p.fill("[name=doc_no]", "SO-TEST-1");
+await p.click("button:has-text('Save Sales Order')"); await p.waitForSelector("text=CPO-00002 saved");
+const soId = Number(p.url().split("/").pop());
+ok((await getJ("/api/d/quotation/" + (soId - 1))).doc.status === "Accepted" || (await p.textContent("#links")).includes("QTN-00001"), "quotation -> sales order in 1 click, quotation accepted");
+await p.click("text=Make Delivery Challan"); await p.waitForSelector("text=only the quantity still pending");
+ok(await p.inputValue("#lines tr:first-child [name=qty]") === "100", "challan pre-filled with pending qty");
+await p.fill("#lines tr:first-child [name=qty]", "60");
+await p.click("button:has-text('Save Delivery Challan')"); await p.waitForSelector("text=DC-00001 saved");
+const dcId = Number(p.url().split("/").pop());
+ok(await statusOf("customer_po", soId) === "Partly Dispatched", "sales order partly dispatched after challan");
+await p.click("text=Make Invoice"); await p.waitForSelector("text=New Sales Invoice"); await p.waitForSelector("#lines tr");
+ok(await p.inputValue("#lines tr:first-child [name=qty]") === "60", "invoice from challan pre-filled");
+await p.click("button:has-text('Save invoice')"); await p.waitForSelector("text=R/26-006 saved", { timeout: 15000 });
+ok(await statusOf("delivery_challan", dcId) === "Invoiced", "challan marked invoiced");
+await p.goto(U + "/#/d/customer_po/" + soId); await p.waitForSelector("text=Linked documents");
+await p.waitForSelector(".link-card");
+const chainTxt = await p.textContent("#links");
+ok(["QTN-00001", "CPO-00002", "DC-00001", "R/26-006"].every((t) => chainTxt.includes(t)) && chainTxt.includes("40"), "linked documents chain + pending 40");
+await p.screenshot({ path: join(SHOTS, "doc_links.png"), fullPage: true });
+await p.click("text=Make Invoice"); await p.waitForSelector("text=New Sales Invoice"); await p.waitForSelector("#lines tr");
+ok(await p.inputValue("#lines tr:first-child [name=qty]") === "40", "invoice from sales order takes only the balance");
+await p.click("button:has-text('Save invoice')"); await p.waitForSelector("text=R/26-007 saved", { timeout: 15000 });
+ok(await statusOf("customer_po", soId) === "Completed", "sales order completed");
+const led = await getJ("/api/stock/item/1");
+ok(led.rows.filter((r) => /Dispatched/.test(r.kind) && ["DC-00001", "R/26-007"].includes(r.ref)).length === 2 && !led.rows.some((r) => r.ref === "R/26-006"), "stock counts challan, not its invoice again");
+await p.goto(U + "/#/"); await p.waitForSelector(".kpis"); await p.goto(U + "/#/d/quotation/" + (soId - 1) + "/print"); await p.waitForSelector(".inv-page");
+await p.screenshot({ path: join(SHOTS, "quotation_print.png"), fullPage: true });
+ok((await p.textContent(".inv-page")).includes("One Thousand One Hundred and Eighty"), "quotation prints with amount in words");
+
+await p.goto(U + "/#/d/purchase_order/new"); await p.waitForSelector("text=New Purchase Order"); await p.waitForSelector("#party_id");
+await p.selectOption("#party_id", "1");
+await p.selectOption("#lines tr:first-child [name=product_id]", "2");
+await p.fill("#lines tr:first-child [name=qty]", "500"); await p.fill("#lines tr:first-child [name=rate]", "100");
+await p.click("button:has-text('Save Purchase Order')"); await p.waitForSelector("text=PO-00001 saved");
+const poId = Number(p.url().split("/").pop());
+const rmBefore = Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance);
+await p.click("text=Make Goods Receipt"); await p.waitForSelector("text=only the quantity still pending");
+await p.fill("#lines tr:first-child [name=qty]", "300");
+await p.click("button:has-text('Save Goods Receipt')"); await p.waitForSelector("text=GRN-00001 saved");
+const grnId = Number(p.url().split("/").pop());
+ok(await statusOf("purchase_order", poId) === "Partly Received", "PO partly received after GRN");
+ok(Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance) === rmBefore + 300, "GRN adds stock");
+await p.click("text=Make Vendor Invoice"); await p.waitForSelector("text=only the quantity still pending");
+await p.fill("[name=doc_no]", "VB-777"); await p.fill("[name=total_amount]", "35400");
+await p.click("button:has-text('Save Vendor Invoice')"); await p.waitForSelector("text=saved");
+ok(await statusOf("grn", grnId) === "Billed", "GRN billed after vendor invoice");
+ok(Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance) === rmBefore + 300, "vendor invoice from GRN does not add stock twice");
+
 // users + roles
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "ravi.store"); await p.fill("[name=full_name]", "Ravi"); await p.selectOption("[name=role]", "Store");

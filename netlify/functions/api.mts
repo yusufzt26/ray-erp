@@ -1,7 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
-import { DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, coerce } from "../../public/js/fields.js";
+import { CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, coerce } from "../../public/js/fields.js";
 import { clearCookie, makeSessionCookie, readSession } from "../lib/auth.mts";
 import { matchParty, matchProducts } from "../lib/match.mts";
 import { nextCode, one, pdfStore, q, tx } from "../lib/db.mts";
@@ -259,7 +259,7 @@ route("POST", "/api/m/:master/import", async (c) => {
 });
 
 // ---------------------------------------------------------------- documents
-const DOC_COLS = "id, doc_type, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, subtotal, tax_amount, total_amount, notes, pdf_file, status, created_at";
+const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, subtotal, tax_amount, total_amount, notes, pdf_file, status, created_at";
 
 route("GET", "/api/d/:type", async (c) => {
   docTypeOf(c.params.type);
@@ -330,7 +330,7 @@ route("POST", "/api/d/:type/save", async (c) => {
       const p = (await query(`SELECT name, gstin FROM ${d.partyTable} WHERE id = $1`, [partyId]))[0];
       if (p) { partyName = p.name; partyGstin ||= p.gstin || ""; } else partyId = null;
     }
-    if (!str(b.doc_no) || !partyName) fail(400, `${d.noLabel} and ${d.partyLabel} are required.`);
+    if ((!str(b.doc_no) && !d.own) || !partyName) fail(400, `${d.own ? "" : d.noLabel + " and "}${d.partyLabel} ${d.own ? "is" : "are"} required.`);
 
     const lines: any[] = [];
     for (const l of (Array.isArray(b.lines) ? b.lines : []).slice(0, 500)) {
@@ -361,8 +361,9 @@ route("POST", "/api/d/:type/save", async (c) => {
       delivery_date: isoDate(b.delivery_date), subtotal, tax_amount: total ? Math.round((total - subtotal) * 100) / 100 : null,
       total_amount: total, notes: str(b.notes), status: d.statuses.includes(b.status) ? b.status : d.statuses[0],
     };
-    const dup = (await query("SELECT ref_no FROM documents WHERE doc_type = $1 AND doc_no = $2 AND party_name = $3 AND id <> $4",
-      [type, header.doc_no, partyName, did || 0]))[0];
+    if (!did && num(b.parent_id)) (header as any).parent_id = num(b.parent_id);
+    const dup = header.doc_no ? (await query("SELECT ref_no FROM documents WHERE doc_type = $1 AND doc_no = $2 AND party_name = $3 AND id <> $4",
+      [type, header.doc_no, partyName, did || 0]))[0] : null;
     if (dup) messages.push(`Note: ${d.noLabel} ${header.doc_no} from ${partyName} was already entered as ${dup.ref_no}.`);
     const keys = Object.keys(header);
     let id = did;
@@ -376,6 +377,7 @@ route("POST", "/api/d/:type/save", async (c) => {
       await query("DELETE FROM document_lines WHERE document_id = $1", [did]);
     } else {
       refNo = await nextCode(query, `doc_${type}`, d.prefix);
+      if (!header.doc_no) header.doc_no = refNo;
       const all: any = { ...header, doc_type: type, ref_no: refNo, pdf_file: pdfFile || null, created_by: c.user!.id };
       const ks = Object.keys(all);
       id = (await query(`INSERT INTO documents (${ks.join(", ")}) VALUES (${ks.map((_, i) => `$${i + 1}`).join(", ")}) RETURNING id`,
@@ -384,6 +386,8 @@ route("POST", "/api/d/:type/save", async (c) => {
     for (let i = 0; i < lines.length; i++)
       await query(`INSERT INTO document_lines (document_id, line_no, product_id, party_part_no, description, hsn, qty, uom, rate, amount)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, [id, i + 1, ...lines[i]]);
+    const parentId = (await query("SELECT parent_id FROM documents WHERE id = $1", [id]))[0]?.parent_id;
+    if (parentId) await refreshStatus(query, parentId);
     return { id, ref_no: refNo };
   });
   return json({ ...result, messages });
@@ -515,6 +519,21 @@ route("GET", "/api/invoices/options", async (c) => {
   return json({ customers, products, pos });
 });
 
+route("GET", "/api/invoices/from-doc/:id", async (c) => {
+  require(c, "sales_invoice", "edit");
+  const src = await one(`SELECT ${DOC_COLS} FROM documents WHERE id = $1 AND doc_type IN ('customer_po', 'delivery_challan')`, [Number(c.params.id)]);
+  if (!src) fail(404, "Not found");
+  const po = src.doc_type === "customer_po" ? src
+    : src.parent_id ? await one(`SELECT ${DOC_COLS} FROM documents WHERE id = $1 AND doc_type = 'customer_po'`, [src.parent_id]) : null;
+  const prog = (await progressOf(q, src.id))!;
+  const ids = prog.lines.map((l: any) => l.product_id).filter(Boolean);
+  const prods = ids.length ? await q("SELECT id, drawing_no, customer_part_no, code AS item_code, gst_rate FROM products WHERE id = ANY($1)", [ids]) : [];
+  const pmap = Object.fromEntries(prods.map((p) => [p.id, p]));
+  const lines = prog.lines.filter((l: any) => l.pending > 0).map((l: any) => ({ ...l, ...(pmap[l.product_id] || {}), qty: l.pending }));
+  if (!lines.length) fail(400, "Everything on this document has already been invoiced.");
+  return json({ po: po || { ...src, doc_no: "", doc_date: null, id: null }, lines, challan: src.doc_type === "delivery_challan" ? { id: src.id, ref_no: src.ref_no } : null, party_id: src.party_id });
+});
+
 route("GET", "/api/invoices/from-po/:id", async (c) => {
   require(c, "sales_invoice", "edit");
   const po = await one(`SELECT ${DOC_COLS} FROM documents WHERE id = $1 AND doc_type = 'customer_po'`, [Number(c.params.id)]);
@@ -566,6 +585,7 @@ route("POST", "/api/invoices/save", async (c) => {
     gstin: str(b.gstin).toUpperCase() || cust.gstin, pan: str(b.pan).toUpperCase() || cust.pan, tax_type: taxType, gst_rate: gstRate,
     subtotal, cgst, sgst, igst, total, delivery_condition: str(b.delivery_condition), payment_terms: str(b.payment_terms),
     packing: JSON.stringify(packing), status: ["Issued", "Cancelled"].includes(b.status) ? b.status : "Issued",
+    challan_id: num(b.challan_id),
   };
   const res = await tx(async (query) => {
     let invId = id, invNo: string;
@@ -586,6 +606,8 @@ route("POST", "/api/invoices/save", async (c) => {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [invId, i + 1, ...lines[i]]);
     if (header.customer_po_id && ["Open", "Partly Dispatched", "Completed"].includes(b.po_status))
       await query("UPDATE documents SET status = $1 WHERE id = $2 AND doc_type = 'customer_po'", [b.po_status, header.customer_po_id]);
+    else if (header.customer_po_id) await refreshStatus(query, header.customer_po_id);
+    if (header.challan_id) await refreshStatus(query, header.challan_id);
     return { id: invId, inv_no: invNo };
   });
   return json(res);
@@ -611,9 +633,143 @@ route("PUT", "/api/invoice-counter", async (c) => {
   return json({ ok: true });
 });
 
+// ---------------------------------------------------------------- linked documents
+const lineKey = (l: any) => (l.product_id ? `p${l.product_id}` : `d${str(l.description).toLowerCase()}`);
+
+/** Ordered vs done per line of a sales order / purchase order / challan / GRN. */
+async function progressOf(query: any, docId: number) {
+  const doc = (await query("SELECT id, doc_type FROM documents WHERE id = $1", [docId]))[0];
+  if (!doc) return null;
+  const lines = await query("SELECT * FROM document_lines WHERE document_id = $1 ORDER BY line_no", [docId]);
+  let done: any[] = [];
+  if (doc.doc_type === "customer_po") {
+    done = await query(`SELECT l.product_id, l.description, l.qty FROM document_lines l JOIN documents d ON d.id = l.document_id
+        WHERE d.parent_id = $1 AND d.doc_type = 'delivery_challan' AND d.status <> 'Cancelled'
+      UNION ALL SELECT l.product_id, l.description, l.qty FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
+        WHERE i.customer_po_id = $1 AND i.challan_id IS NULL AND i.status <> 'Cancelled'`, [docId]);
+  } else if (doc.doc_type === "purchase_order") {
+    done = await query(`SELECT l.product_id, l.description, l.qty FROM document_lines l JOIN documents d ON d.id = l.document_id
+      WHERE d.parent_id = $1 AND d.doc_type IN ('grn', 'vendor_invoice') AND d.status <> 'Cancelled'`, [docId]);
+  } else if (doc.doc_type === "delivery_challan") {
+    done = await query(`SELECT l.product_id, l.description, l.qty FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
+      WHERE i.challan_id = $1 AND i.status <> 'Cancelled'`, [docId]);
+  } else if (doc.doc_type === "grn" || doc.doc_type === "quotation") {
+    done = await query(`SELECT l.product_id, l.description, l.qty FROM document_lines l JOIN documents d ON d.id = l.document_id
+      WHERE d.parent_id = $1 AND d.status <> 'Cancelled'`, [docId]);
+  }
+  const used: Record<string, number> = {};
+  for (const r of done) used[lineKey(r)] = (used[lineKey(r)] || 0) + Number(r.qty || 0);
+  const out = lines.map((l: any) => {
+    const k = lineKey(l), take = Math.min(Number(l.qty || 0), Math.max(0, used[k] || 0));
+    used[k] = (used[k] || 0) - take;
+    return { ...l, done: take, pending: Math.round((Number(l.qty || 0) - take) * 1000) / 1000 };
+  });
+  return { doc, lines: out, anyDone: done.length > 0, allDone: out.every((l: any) => l.pending <= 0) };
+}
+
+/** Move a document's status forward after something was made from it. */
+async function refreshStatus(query: any, docId: number) {
+  const p = await progressOf(query, docId);
+  if (!p) return;
+  const cur = (await query("SELECT status FROM documents WHERE id = $1", [docId]))[0]?.status;
+  if (cur === "Cancelled") return;
+  const next: Record<string, string> = {
+    quotation: p.anyDone ? "Accepted" : cur,
+    customer_po: p.allDone ? "Completed" : p.anyDone ? "Partly Dispatched" : "Open",
+    purchase_order: p.allDone ? "Received" : p.anyDone ? "Partly Received" : "Open",
+    delivery_challan: p.allDone ? "Invoiced" : "Open",
+    grn: p.anyDone ? "Billed" : "Received",
+  };
+  const st = next[p.doc.doc_type];
+  if (st && st !== cur && !(p.doc.doc_type === "quotation" && cur === "Lost"))
+    await query("UPDATE documents SET status = $1 WHERE id = $2", [st, docId]);
+}
+
+/** New document pre-filled from another one, with only the quantity still pending. */
+route("GET", "/api/convert/:id/:target", async (c) => {
+  const target = c.params.target;
+  const td = docTypeOf(target);
+  require(c, target, "edit");
+  const src = await one(`SELECT ${DOC_COLS} FROM documents WHERE id = $1`, [Number(c.params.id)]);
+  if (!src) fail(404, "Not found");
+  if (!((CONVERT as any)[src.doc_type] || []).includes(target)) fail(400, "These documents cannot be converted.");
+  const prog = (await progressOf(q, src.id))!;
+  const fromOwn = (DOC_TYPES as any)[src.doc_type].own;
+  const lines = prog.lines.filter((l: any) => l.pending > 0).map((l: any) => ({
+    product_id: l.product_id, party_part_no: l.party_part_no, description: l.description, hsn: l.hsn, uom: l.uom,
+    qty: l.pending, rate: l.rate, amount: l.rate !== null ? Math.round(l.pending * l.rate * 100) / 100 : null,
+  }));
+  if (!lines.length) fail(400, "Everything on this document has already been done.");
+  const sub = lines.reduce((t: number, l: any) => t + (l.amount || 0), 0);
+  const ratio = Number(src.subtotal) ? Number(src.total_amount || 0) / Number(src.subtotal) : 1.18;
+  const doc: any = {
+    party_id: src.party_id, party_name: src.party_name, party_gstin: src.party_gstin, doc_date: todayIso(), parent_id: src.id,
+    status: td.statuses[0], total_amount: target === "vendor_invoice" ? null : Math.round(sub * (ratio || 1) * 100) / 100,
+    doc_no: target === "customer_po" ? "" : target === "vendor_invoice" ? "" : null,
+    notes: `From ${(DOC_TYPES as any)[src.doc_type].singular} ${src.ref_no}${!fromOwn && src.doc_no ? ` (${src.doc_no})` : ""}`,
+    delivery_date: src.delivery_date,
+  };
+  return json({ doc, lines, source: { type: src.doc_type, id: src.id, ref_no: src.ref_no } });
+});
+
+/** The whole chain a document or invoice belongs to, plus pending quantities. */
+route("GET", "/api/links/:kind/:id", async (c) => {
+  if (!c.user) fail(401, "Please log in.");
+  const id = Number(c.params.id);
+  const docIds = new Set<number>();
+  const invIds = new Set<number>();
+  let start: number | null = null;
+  if (c.params.kind === "invoice") {
+    const inv = await one("SELECT id, customer_po_id, challan_id FROM invoices WHERE id = $1", [id]);
+    if (!inv) fail(404, "Not found");
+    invIds.add(inv.id);
+    start = inv.challan_id || inv.customer_po_id;
+  } else start = id;
+  // walk up to the first document, then collect everything below it
+  let root = start;
+  for (let i = 0; root && i < 10; i++) {
+    const r = await one("SELECT parent_id FROM documents WHERE id = $1", [root]);
+    if (!r?.parent_id) break;
+    root = r.parent_id;
+  }
+  if (root) {
+    let frontier = [root];
+    docIds.add(root);
+    for (let i = 0; frontier.length && i < 10; i++) {
+      const kids = await q("SELECT id FROM documents WHERE parent_id = ANY($1)", [frontier]);
+      frontier = kids.map((k) => k.id).filter((k) => !docIds.has(k));
+      frontier.forEach((k) => docIds.add(k));
+    }
+    for (const r of await q("SELECT id FROM invoices WHERE customer_po_id = ANY($1) OR challan_id = ANY($1)", [[...docIds]])) invIds.add(r.id);
+  }
+  const docs = docIds.size ? await q(`SELECT id, doc_type, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS day, status, total_amount AS amount, parent_id
+    FROM documents WHERE id = ANY($1)`, [[...docIds]]) : [];
+  const invs = invIds.size ? await q(`SELECT id, inv_no, to_char(inv_date, 'YYYY-MM-DD') AS day, status, total AS amount, customer_id FROM invoices WHERE id = ANY($1)`, [[...invIds]]) : [];
+  const order = ["quotation", "customer_po", "purchase_order", "delivery_challan", "grn", "vendor_invoice"];
+  const items = [
+    ...docs.filter((d) => c.perms[d.doc_type] && c.perms[d.doc_type] !== "none").map((d) => ({
+      type: d.doc_type, label: (DOC_TYPES as any)[d.doc_type].singular, ref: d.ref_no, no: d.doc_no !== d.ref_no ? d.doc_no : "",
+      day: d.day, status: d.status, amount: d.amount, href: `#/d/${d.doc_type}/${d.id}`, current: c.params.kind === "doc" && d.id === id, rank: order.indexOf(d.doc_type),
+    })),
+    ...(c.perms.sales_invoice !== "none" ? invs : []).map((v) => ({
+      type: "invoice", label: "Sales Invoice", ref: v.inv_no, no: "", day: v.day, status: v.status, amount: v.amount,
+      href: `#/invoices/${v.id}`, current: c.params.kind === "invoice" && v.id === id, rank: 9,
+    })),
+  ].sort((a, b) => a.rank - b.rank || String(a.day).localeCompare(String(b.day)));
+  let progress = null;
+  if (c.params.kind === "doc") {
+    const p = await progressOf(q, id);
+    if (p && ["customer_po", "purchase_order", "delivery_challan", "grn"].includes(p.doc.doc_type))
+      progress = p.lines.map((l: any) => ({ description: l.description, uom: l.uom, qty: l.qty, done: l.done, pending: l.pending }));
+  }
+  return json({ items, progress });
+});
+
 // ---------------------------------------------------------------- stock
 // Balance = manual entries + vendor invoice receipts - sales invoice dispatches.
 const STOCK_KINDS: Record<string, number> = { Opening: 1, Production: 1, Issue: -1, Adjustment: 0 };
+const STOCK_SUM = `SELECT product_id, SUM(qty) FILTER (WHERE grp = 'manual') AS manual, SUM(qty) FILTER (WHERE grp = 'in') AS received,
+  -SUM(qty) FILTER (WHERE grp = 'out') AS dispatched, SUM(qty) AS balance FROM stock_flow GROUP BY product_id`;
 
 route("GET", "/api/stock", async (c) => {
   require(c, "stock");
@@ -624,14 +780,9 @@ route("GET", "/api/stock", async (c) => {
   if (qs) { params.push(`%${qs}%`); where += ` AND (p.code ILIKE $${params.length} OR p.name ILIKE $${params.length} OR p.customer_part_no ILIKE $${params.length} OR p.drawing_no ILIKE $${params.length})`; }
   if (cat && (PRODUCT_CATEGORIES as any)[cat]) { params.push(cat); where += ` AND p.category = $${params.length}`; }
   const rows = await q(`SELECT p.id, p.code, p.name, p.category, p.uom, p.customer_part_no,
-      COALESCE(m.q, 0) AS manual, COALESCE(r.q, 0) AS received, COALESCE(s.q, 0) AS dispatched,
-      COALESCE(m.q, 0) + COALESCE(r.q, 0) - COALESCE(s.q, 0) AS balance
-    FROM products p
-    LEFT JOIN (SELECT product_id, SUM(qty) AS q FROM stock_moves GROUP BY product_id) m ON m.product_id = p.id
-    LEFT JOIN (SELECT l.product_id, SUM(l.qty) AS q FROM document_lines l JOIN documents d ON d.id = l.document_id
-      WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled' AND l.product_id IS NOT NULL GROUP BY l.product_id) r ON r.product_id = p.id
-    LEFT JOIN (SELECT l.product_id, SUM(l.qty) AS q FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
-      WHERE i.status <> 'Cancelled' AND l.product_id IS NOT NULL GROUP BY l.product_id) s ON s.product_id = p.id
+      COALESCE(f.manual, 0) AS manual, COALESCE(f.received, 0) AS received, COALESCE(f.dispatched, 0) AS dispatched,
+      COALESCE(f.balance, 0) AS balance
+    FROM products p LEFT JOIN (${STOCK_SUM}) f ON f.product_id = p.id
     WHERE ${where} ORDER BY p.code`, params);
   return json({ rows });
 });
@@ -651,18 +802,8 @@ route("GET", "/api/stock/item/:id", async (c) => {
   const id = Number(c.params.id);
   const product = await one("SELECT id, code, name, category, uom, customer_part_no, drawing_no FROM products WHERE id = $1", [id]);
   if (!product) fail(404, "Item not found");
-  const rows = await q(`SELECT * FROM (
-      SELECT to_char(m.move_date, 'YYYY-MM-DD') AS day, m.kind AS kind, m.ref AS ref, m.notes AS party, m.qty AS qty, m.id AS sort2, NULL::text AS href
-        FROM stock_moves m WHERE m.product_id = $1
-      UNION ALL
-      SELECT to_char(COALESCE(d.doc_date, d.created_at::date), 'YYYY-MM-DD'), 'Received', d.ref_no || COALESCE(' / ' || d.doc_no, ''), d.party_name, l.qty, l.id, '#/d/vendor_invoice/' || d.id
-        FROM document_lines l JOIN documents d ON d.id = l.document_id
-        WHERE l.product_id = $1 AND d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled'
-      UNION ALL
-      SELECT to_char(i.inv_date, 'YYYY-MM-DD'), 'Dispatched', i.inv_no, cu.name, -l.qty, l.id, '#/invoices/' || i.id
-        FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id LEFT JOIN customers cu ON cu.id = i.customer_id
-        WHERE l.product_id = $1 AND i.status <> 'Cancelled'
-    ) x ORDER BY day, sort2`, [id]);
+  const rows = await q(`SELECT to_char(day, 'YYYY-MM-DD') AS day, kind, ref, party, qty, href FROM stock_flow
+    WHERE product_id = $1 ORDER BY stock_flow.day, (CASE grp WHEN 'manual' THEN 0 WHEN 'in' THEN 1 ELSE 2 END), src_id`, [id]);
   let bal = 0;
   for (const r of rows) { bal += Number(r.qty); r.balance = Math.round(bal * 1000) / 1000; }
   return json({ product, rows, balance: bal });
@@ -825,18 +966,10 @@ route("GET", "/api/dash/:view", async (c) => {
       WHERE doc_type = 'vendor_invoice' ORDER BY doc_date DESC NULLS LAST, id DESC LIMIT 8`);
   }
   if (view === "store" || view === "admin") {
-    const stock = await q(`SELECT p.id, p.code, p.name, p.category, p.uom,
-        COALESCE(m.q, 0) + COALESCE(r.q, 0) - COALESCE(s.q, 0) AS balance
-      FROM products p
-      LEFT JOIN (SELECT product_id, SUM(qty) AS q FROM stock_moves GROUP BY product_id) m ON m.product_id = p.id
-      LEFT JOIN (SELECT l.product_id, SUM(l.qty) AS q FROM document_lines l JOIN documents d ON d.id = l.document_id
-        WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled' AND l.product_id IS NOT NULL GROUP BY l.product_id) r ON r.product_id = p.id
-      LEFT JOIN (SELECT l.product_id, SUM(l.qty) AS q FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
-        WHERE i.status <> 'Cancelled' AND l.product_id IS NOT NULL GROUP BY l.product_id) s ON s.product_id = p.id
-      WHERE p.active = 1 ORDER BY p.code`);
+    const stock = await q(`SELECT p.id, p.code, p.name, p.category, p.uom, COALESCE(f.balance, 0) AS balance
+      FROM products p LEFT JOIN (${STOCK_SUM}) f ON f.product_id = p.id WHERE p.active = 1 ORDER BY p.code`);
     out.stock = stock.map((r) => ({ ...r, balance: Number(r.balance) }));
-    const disp = await q(`SELECT to_char(i.inv_date, 'YYYY-MM') AS m, SUM(l.qty) AS q FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
-      WHERE i.status <> 'Cancelled' AND i.inv_date >= $1 GROUP BY 1`, [from12]);
+    const disp = await q(`SELECT to_char(day, 'YYYY-MM') AS m, -SUM(qty) AS q FROM stock_flow WHERE grp = 'out' AND day >= $1 GROUP BY 1`, [from12]);
     const dby = Object.fromEntries(disp.map((r) => [r.m, Number(r.q)]));
     out.dispatchByMonth = months.map((mm) => dby[mm] || 0);
     const made = await q(`SELECT to_char(move_date, 'YYYY-MM') AS m, SUM(qty) AS q FROM stock_moves WHERE kind = 'Production' AND move_date >= $1 GROUP BY 1`, [from12]);

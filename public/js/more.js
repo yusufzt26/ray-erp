@@ -328,10 +328,10 @@ export function morePages(ctx) {
               ${parties.map((x) => `<option value="${x.id}" ${p.get("party") === String(x.id) ? "selected" : ""}>${h(x.name)} (${h(x.code)})</option>`).join("")}</select>
             <small id="due"></small></label>
           <label>Date <span class="req">*</span><input type="date" name="pay_date" value="${today()}" required></label>
-          <label>Amount (₹) <span class="req">*</span><input name="amount" inputmode="decimal" required></label>
+          <label>Amount (₹) <span class="req">*</span><input name="amount" inputmode="decimal" required value="${h(p.get("amount") || "")}"></label>
           <label>Mode <select name="mode">${["NEFT", "RTGS", "Cheque", "UPI", "Cash", "Other"].map((m) => `<option>${m}</option>`).join("")}</select></label>
           <label>Reference <input name="reference" placeholder="UTR / cheque no"></label>
-          <label class="full">Note <input name="notes"></label>
+          <label class="full">Note <input name="notes" value="${p.get("ref") ? `Against ${h(p.get("ref"))}` : ""}"></label>
         </div>
         <div class="buttons"><button class="btn primary">Save payment</button></div>
       </form>`);

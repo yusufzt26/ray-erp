@@ -1,7 +1,9 @@
-import { DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES } from "./fields.js";
+import { CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES } from "./fields.js";
 import { readPdf } from "./pdfread.js";
 import { invoicePages } from "./invoice.js";
 import { morePages } from "./more.js";
+import { linksPanel } from "./links.js";
+import { docPrint } from "./docprint.js";
 import { DASHBOARDS, defaultDash, renderDash } from "./dash.js";
 
 // ------------------------------------------------------------------ helpers
@@ -57,11 +59,14 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 function layout(body) {
   const r = location.hash;
   const on = (prefix) => (r.startsWith(prefix) ? "on" : "");
+  const navGroup = (title, side, extra) => {
+    const links = Object.entries(DOC_TYPES).filter(([k, d]) => d.side === side && can(k)).map(([k, d]) => `<a href="#/d/${k}" class="${on("#/d/" + k)}">${d.icon} ${d.title}</a>`).join("") + extra;
+    return links ? `<div class="sec">${title}</div>${links}` : "";
+  };
   const side = `
     <a href="#/" class="${r === "#/" || r === "" ? "on" : ""}">🏠 Home</a>
-    ${can("customer_po") || can("vendor_invoice") || can("sales_invoice") ? '<div class="sec">Documents</div>' : ""}
-    ${Object.entries(DOC_TYPES).filter(([k]) => can(k)).map(([k, d]) => `<a href="#/d/${k}" class="${on("#/d/" + k)}">${d.icon} ${d.title}</a>`).join("")}
-    ${can("sales_invoice") ? `<a href="#/invoices" class="${on("#/invoices")}">🧾 Sales Invoices</a>` : ""}
+    ${navGroup("Sales", "sales", can("sales_invoice") ? `<a href="#/invoices" class="${on("#/invoices")}">🧾 Sales Invoices</a>` : "")}
+    ${navGroup("Purchase", "purchase", "")}
     ${can("stock") || can("sales_invoice") || can("accounts") ? '<div class="sec">Stock & Accounts</div>' : ""}
     ${can("stock") ? `<a href="#/stock" class="${on("#/stock")}">📊 Stock</a>` : ""}
     ${can("sales_invoice") ? `<a href="#/sales-register" class="${on("#/sales-register")}">📈 Sales Register</a>` : ""}
@@ -358,7 +363,8 @@ pages.docList = async (type) => {
   layout(`
     <div class="head"><h1>${d.title} <small>(${rows.length})</small></h1>
       <div class="actions">
-        ${can(type, "edit") ? `<a class="btn primary" href="#/d/${type}/upload">⬆ Upload PDF</a><a class="btn" href="#/d/${type}/new">＋ Enter manually</a>` : ""}
+        ${can(type, "edit") ? (d.pdf ? `<a class="btn primary" href="#/d/${type}/upload">⬆ Upload PDF</a><a class="btn" href="#/d/${type}/new">＋ Enter manually</a>`
+          : `<a class="btn primary" href="#/d/${type}/new">＋ New ${h(d.singular)}</a>`) : ""}
         <button class="btn" id="exx">⬇ Excel</button><button class="btn" id="exc">⬇ CSV</button>
       </div></div>
     <form class="filters" id="flt"><input name="q" value="${h(qs)}" placeholder="Search ${h(d.noLabel)}, ref or ${d.partyLabel.toLowerCase()}…"><button class="btn">Search</button></form>
@@ -465,8 +471,10 @@ pages.docForm = async (type, id, preset = null) => {
 
   layout(`
     <div class="head"><h1>${doc.id ? `${d.singular} <span class="code">${h(doc.ref_no)}</span>` : `New ${d.singular}`}</h1>
-      <div class="actions">${doc.id && type === "customer_po" && can("sales_invoice", "edit") ? `<a class="btn primary" href="#/invoices/new?po=${doc.id}">🧾 Make Invoice</a>` : ""}
+      <div class="actions">${doc.id ? convertButtons(type, doc) : ""}
+      ${doc.id && d.printTitle ? `<a class="btn" href="#/d/${type}/${doc.id}/print">🖨 Print</a>` : ""}
       <a class="btn" href="#/d/${type}">← Back to list</a></div></div>
+    ${preset?.source ? `<div class="flash ok">Made from ${h(DOC_TYPES[preset.source.type].singular)} ${h(preset.source.ref_no)}: only the quantity still pending is filled in. Check and save.</div>` : ""}
     <div id="err"></div>
     ${found ? `<div class="detect"><b>Read from PDF "${h(found.name)}":</b>
       ${found.scanned ? '<span class="miss">This PDF looks scanned (no text inside). Please type the details while looking at the PDF.</span>' : `
@@ -488,7 +496,7 @@ pages.docForm = async (type, id, preset = null) => {
           <input name="party_gstin" id="party_gstin" maxlength="15" value="${h(doc.party_gstin)}" class="upper ${found && doc.party_gstin ? "auto" : ""}">
           ${found && found.gstins.length > 1 ? `<small>GSTINs in PDF: ${found.gstins.map(h).join(", ")}</small>` : ""}</label>
         <label class="check" id="create_party_box" ${doc.party_id ? "hidden" : ""}><input type="checkbox" name="create_party" ${found && !found.party ? "checked" : ""}> Add as new ${d.partyLabel.toLowerCase()} in master</label>
-        <label>${h(d.noLabel)} <span class="req">*</span><input name="doc_no" required value="${h(doc.doc_no)}" class="${cls(found?.doc_no)}"></label>
+        <label>${h(d.noLabel)} ${d.own ? "" : '<span class="req">*</span>'}<input name="doc_no" ${d.own ? `placeholder="Given automatically"` : "required"} value="${h(doc.doc_no)}" class="${cls(found?.doc_no)}"></label>
         <label>${h(d.dateLabel)}<input name="doc_date" type="date" value="${h(doc.doc_date)}" class="${cls(found?.doc_date)}"></label>
         ${type === "customer_po" ? `<label>Delivery date<input name="delivery_date" type="date" value="${h(doc.delivery_date)}" class="${found && doc.delivery_date ? "auto" : ""}"></label>` : ""}
         <label>Status<select name="status">${d.statuses.map((s) => `<option ${doc.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
@@ -512,7 +520,9 @@ pages.docForm = async (type, id, preset = null) => {
         ${found ? `<a class="btn" href="#/d/${type}/upload">Cancel</a>` : ""}</div>` : ""}
       </div>
     </form>
+    <div id="links"></div>
     ${doc.id && editable ? '<button class="btn danger small" id="del">Delete</button>' : ""}`);
+  if (doc.id) linksPanel(api, "doc", doc.id).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
 
   const tbody = $("#lines");
   const renumber = () => { $$("tr", tbody).forEach((r, i) => ($(".ln", r).textContent = i + 1)); recalc(); };
@@ -560,6 +570,7 @@ pages.docForm = async (type, id, preset = null) => {
     const fd = new FormData(e.target);
     const body = Object.fromEntries(["party_id", "party_name", "party_gstin", "doc_no", "doc_date", "delivery_date", "status", "total_amount", "notes"].map((k) => [k, fd.get(k)]));
     body.create_party = fd.has("create_party");
+    body.parent_id = doc.parent_id || null;
     body.id = doc.id || null;
     body.pdf_file = doc.pdf_file || "";
     body.lines = $$("tr", tbody).map((r) => ({
@@ -588,6 +599,17 @@ pages.docForm = async (type, id, preset = null) => {
     location.hash = `#/d/${type}`;
   };
 };
+
+function convertButtons(type, doc) {
+  const out = [];
+  for (const t of CONVERT[type] || []) {
+    if (t === "invoice") { if (can("sales_invoice", "edit")) out.push(`<a class="btn primary" href="#/invoices/new?from=${doc.id}">🧾 Make Invoice</a>`); }
+    else if (can(t, "edit")) out.push(`<a class="btn primary" href="#/d/${t}/new?from=${doc.id}">${DOC_TYPES[t].icon} Make ${h(DOC_TYPES[t].singular)}</a>`);
+  }
+  if (type === "vendor_invoice" && can("accounts", "edit") && doc.party_id)
+    out.push(`<a class="btn" href="#/payments/new?dir=out&party=${doc.party_id}&amount=${doc.total_amount || ""}&ref=${encodeURIComponent(doc.doc_no || "")}">💰 Record payment</a>`);
+  return out.join("");
+}
 
 // ------------------------------------------------------------------ admin
 pages.users = async () => {
@@ -732,6 +754,12 @@ async function route() {
       if (!can(p[1])) return pages.forbidden();
       if (p.length === 2) return await pages.docList(p[1]);
       if (p[2] === "upload") return pages.docUpload(p[1]);
+      if (p[3] === "print") return await docPrint({ api, layout, S }, p[1], p[2]);
+      const from = new URLSearchParams(location.hash.split("?")[1] || "").get("from");
+      if (p[2] === "new" && from) {
+        if (!can(p[1], "edit")) return pages.forbidden();
+        return await pages.docForm(p[1], null, await api("GET", `/api/convert/${from}/${p[1]}`));
+      }
       return await pages.docForm(p[1], p[2] === "new" ? null : p[2]);
     }
     if (p[0] === "invoices") {

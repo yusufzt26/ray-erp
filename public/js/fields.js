@@ -7,10 +7,14 @@ export const MODULES = {
   customers: "Customers",
   vendors: "Vendors",
   products: "Products",
-  customer_po: "Customer POs",
+  quotation: "Quotations",
+  customer_po: "Sales Orders (Customer POs)",
+  delivery_challan: "Delivery Challans",
   sales_invoice: "Sales Invoices & Sales Register",
   stock: "Stock",
   accounts: "Accounts (receivable / payable)",
+  purchase_order: "Purchase Orders",
+  grn: "Goods Receipts (GRN)",
   vendor_invoice: "Vendor Invoices",
   users: "Users & Roles",
 };
@@ -86,17 +90,47 @@ export const MASTERS = {
   products: { title: "Products", singular: "Product", table: "products", fields: PRODUCT_FIELDS, prefix: null, counter: null, icon: "📦" },
 };
 
+// side: which menu group. own: we give the number (doc_no = our ref). pdf: can be read from an uploaded PDF.
 export const DOC_TYPES = {
+  quotation: {
+    title: "Quotations", singular: "Quotation", partyTable: "customers", partyLabel: "Customer", partyMaster: "customers",
+    prefix: "QTN", noLabel: "Quotation No", dateLabel: "Quotation Date", productFlag: "sellable",
+    statuses: ["Draft", "Sent", "Accepted", "Lost"], icon: "📝", side: "sales", own: true, printTitle: "QUOTATION",
+  },
   customer_po: {
-    title: "Customer POs", singular: "Customer PO", partyTable: "customers", partyLabel: "Customer",
+    title: "Sales Orders", singular: "Sales Order", partyTable: "customers", partyLabel: "Customer",
     partyMaster: "customers", prefix: "CPO", noLabel: "Customer PO No", dateLabel: "PO Date",
-    productFlag: "sellable", statuses: ["Open", "Partly Dispatched", "Completed", "Cancelled"], icon: "📥",
+    productFlag: "sellable", statuses: ["Open", "Partly Dispatched", "Completed", "Cancelled"], icon: "📥", side: "sales", pdf: true, printTitle: "SALES ORDER ACKNOWLEDGEMENT",
+  },
+  delivery_challan: {
+    title: "Delivery Challans", singular: "Delivery Challan", partyTable: "customers", partyLabel: "Customer", partyMaster: "customers",
+    prefix: "DC", noLabel: "Challan No", dateLabel: "Challan Date", productFlag: "sellable",
+    statuses: ["Open", "Invoiced", "Cancelled"], icon: "🚚", side: "sales", own: true, printTitle: "DELIVERY CHALLAN",
+  },
+  purchase_order: {
+    title: "Purchase Orders", singular: "Purchase Order", partyTable: "vendors", partyLabel: "Vendor", partyMaster: "vendors",
+    prefix: "PO", noLabel: "PO No", dateLabel: "PO Date", productFlag: "purchasable",
+    statuses: ["Open", "Partly Received", "Received", "Cancelled"], icon: "🛒", side: "purchase", own: true, printTitle: "PURCHASE ORDER",
+  },
+  grn: {
+    title: "Goods Receipts (GRN)", singular: "Goods Receipt", partyTable: "vendors", partyLabel: "Vendor", partyMaster: "vendors",
+    prefix: "GRN", noLabel: "GRN No", dateLabel: "Received Date", productFlag: "purchasable",
+    statuses: ["Received", "Billed", "Cancelled"], icon: "📦", side: "purchase", own: true, printTitle: "GOODS RECEIPT NOTE",
   },
   vendor_invoice: {
     title: "Vendor Invoices", singular: "Vendor Invoice", partyTable: "vendors", partyLabel: "Vendor",
     partyMaster: "vendors", prefix: "VIN", noLabel: "Invoice No", dateLabel: "Invoice Date",
-    productFlag: "purchasable", statuses: ["Received", "Checked", "Paid", "Cancelled"], icon: "🧾",
+    productFlag: "purchasable", statuses: ["Received", "Checked", "Paid", "Cancelled"], icon: "🧾", side: "purchase", pdf: true,
   },
+};
+
+/** What each document can be turned into with one click. */
+export const CONVERT = {
+  quotation: ["customer_po"],
+  customer_po: ["delivery_challan", "invoice"],
+  delivery_challan: ["invoice"],
+  purchase_order: ["grn", "vendor_invoice"],
+  grn: ["vendor_invoice"],
 };
 
 /** Turn a form / Excel / CSV value into what the database stores. Throws Error with a readable message. */

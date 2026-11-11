@@ -271,3 +271,14 @@ table.grid.mini td, table.grid.mini th { padding: .35rem .5rem; font-size: .86re
 table.grid.mini td { white-space: normal; }
 .quick.slim .tile { flex: 1 1 150px; }
 @media (max-width: 760px) { svg.chart .ax { font-size: 16px; } }
+
+/* linked documents */
+.card.links h2 { margin-top: 0; }
+.chain { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: .8rem; }
+.chain .arrow { color: var(--muted); font-size: 1.2rem; }
+.link-card { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; padding: .5rem .8rem; background: #fff; text-decoration: none; color: var(--ink); min-width: 150px; }
+.link-card:hover { border-color: var(--brand-2); }
+.link-card.current { border: 2px solid var(--brand-2); background: #eaf2fa; }
+.link-card small { color: var(--muted); font-size: .76rem; }
+.link-card b { color: var(--brand); }
+.pend { color: #b86b00; } .ok-ink { color: #2e7d4f; }
