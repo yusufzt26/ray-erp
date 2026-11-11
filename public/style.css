@@ -291,3 +291,8 @@ table.grid.mini td { white-space: normal; }
 #bills input[name=pay] { width: 130px; text-align: right; }
 .flash.warn { background: #fdf0d5; color: #7a5200; }
 #bills tr.hit td { background: var(--ok); }
+table.grid td.wrap { white-space: normal; min-width: 220px; max-width: 360px; }
+table.bank td { vertical-align: top; }
+table.bank .det { min-width: 240px; }
+table.bank .det .bills { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+table.bank .det input.qty { width: 100px; margin-left: 4px; }

@@ -5,6 +5,7 @@ import { morePages } from "./more.js";
 import { linksPanel, payStatus } from "./links.js";
 import { docPrint } from "./docprint.js";
 import { ewayPage } from "./eway.js";
+import { bankPages } from "./bank.js";
 import { DASHBOARDS, defaultDash, renderDash } from "./dash.js";
 
 // ------------------------------------------------------------------ helpers
@@ -72,7 +73,8 @@ function layout(body) {
     ${can("stock") || can("sales_invoice") || can("accounts") ? '<div class="sec">Stock & Accounts</div>' : ""}
     ${can("stock") ? `<a href="#/stock" class="${on("#/stock")}">📊 Stock</a>` : ""}
     ${can("sales_invoice") ? `<a href="#/sales-register" class="${on("#/sales-register")}">📈 Sales Register</a>` : ""}
-    ${can("accounts") ? `<a href="#/accounts" class="${on("#/accounts") || on("#/payments")}">💰 Accounts</a>` : ""}
+    ${can("accounts") ? `<a href="#/accounts" class="${on("#/accounts") || on("#/payments")}">💰 Accounts</a>
+      <a href="#/bank" class="${on("#/bank")}">🏦 Bank</a>` : ""}
     <div class="sec">Masters</div>
     ${Object.entries(MASTERS).filter(([k]) => can(k)).map(([k, m]) => `<a href="#/m/${k}" class="${on("#/m/" + k)}">${m.icon} ${m.title}</a>`).join("")}
     ${can("users") ? `<div class="sec">Admin</div>
@@ -746,6 +748,7 @@ pages.forbidden = () => layout(`<h1>Not allowed</h1><p>Your role does not have a
 pages.notFound = () => layout(`<h1>Page not found</h1><p><a class="btn" href="#/">Back to Home</a></p>`);
 
 const more = morePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
+const bank = bankPages({ api, layout, can, flash, $, $$, errorBox, busy });
 const inv = invoicePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 
 // ------------------------------------------------------------------ router
@@ -803,6 +806,10 @@ async function routeInner() {
     if (p[0] === "eway" && p[2]) {
       if (!can(p[1] === "invoice" ? "sales_invoice" : p[1])) return pages.forbidden();
       return await ewayPage({ api, layout, S, can, flash, $, errorBox, busy }, p[1], p[2]);
+    }
+    if (p[0] === "bank") {
+      if (!can("accounts")) return pages.forbidden();
+      return p[1] === "expenses" ? await bank.expenses() : await bank.bank();
     }
     if (p[0] === "load-data") return await more.loadData();
     if (p[0] === "sales-register") return can("sales_invoice") ? await more.salesRegister() : pages.forbidden();

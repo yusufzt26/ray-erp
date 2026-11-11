@@ -1333,8 +1333,217 @@ route("POST", "/api/payments", async (c) => {
 
 route("DELETE", "/api/payments/:id", async (c) => {
   require(c, "accounts", "edit");
+  await q("UPDATE bank_lines SET status = 'new', payment_id = NULL, posted_as = NULL WHERE payment_id = $1", [Number(c.params.id)]);
   await q("DELETE FROM payments WHERE id = $1", [Number(c.params.id)]);
   return json({ ok: true });
+});
+
+// ---------------------------------------------------------------- bank statement
+const EXPENSE_CATEGORIES = ["Bank charges", "Salary & wages", "Rent", "Electricity", "GST paid", "TDS / income tax paid",
+  "Freight & transport", "Fuel & travel", "Repairs & maintenance", "Office & admin", "Loan / EMI", "Interest paid",
+  "Cash withdrawal", "Transfer to own account", "Owner / capital", "Other expense", "Interest received", "Other income"];
+const STOP = new Set(["PVT", "LTD", "PRIVATE", "LIMITED", "LLP", "INDIA", "AND", "THE", "COMPANY", "CO", "ENTERPRISES", "INDUSTRIES", "M/S", "MS", "TECH",
+  "NEFT", "RTGS", "IMPS", "UPI", "INB", "TRF", "TRANSFER", "FROM", "BY", "TO", "CR", "DR", "CHQ", "CHEQUE", "CLG", "DEP", "PAYMENT", "SBIN", "HDFC", "ICIC", "UTIB"]);
+const words = (t: string) => String(t || "").toUpperCase().replace(/[^A-Z ]+/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !STOP.has(w));
+const ruleKey = (desc: string) => words(desc).slice(0, 3).join(" ");
+const payMode = (desc: string) => (/RTGS/i.test(desc) ? "RTGS" : /NEFT/i.test(desc) ? "NEFT" : /IMPS/i.test(desc) ? "IMPS" : /UPI/i.test(desc) ? "UPI"
+  : /CHQ|CHEQUE|CLG|CLEARING/i.test(desc) ? "Cheque" : /CASH|ATM/i.test(desc) ? "Cash" : "Other");
+function guessCategory(desc: string, credit: boolean) {
+  const d = desc.toUpperCase();
+  if (credit) return /INT\.?\s*(PD|PAID|CR)|INTEREST/.test(d) ? "Interest received" : "";
+  if (/CHRG|CHARGE|SMS|COMMISSION|FEE|GST ON|AMC|DEBIT CARD|MAINT/.test(d)) return "Bank charges";
+  if (/SALARY|SAL |WAGES|PAYROLL/.test(d)) return "Salary & wages";
+  if (/GST|CBIC|GSTN/.test(d)) return "GST paid";
+  if (/CBDT|TDS|ITNS|INCOME TAX|ADVANCE TAX/.test(d)) return "TDS / income tax paid";
+  if (/ATM|CASH W|SELF/.test(d)) return "Cash withdrawal";
+  if (/EMI|LOAN/.test(d)) return "Loan / EMI";
+  if (/RENT/.test(d)) return "Rent";
+  if (/MSEB|MSEDCL|ELECTRIC|POWER|TATA POWER/.test(d)) return "Electricity";
+  if (/PETROL|FUEL|HPCL|IOCL|BPCL|FASTAG|TOLL/.test(d)) return "Fuel & travel";
+  if (/TRANSPORT|LOGISTIC|COURIER|ROADWAYS|FREIGHT/.test(d)) return "Freight & transport";
+  return "";
+}
+
+/** Best bills for an amount: exact single bill, then oldest run, then any group, else oldest first. */
+function matchAmount(open: any[], amt: number) {
+  const near = (x: number) => Math.abs(x - amt) <= 1;
+  const one = open.find((b) => near(b.balance));
+  if (one) return { exact: true, pick: [{ id: one.id, ref: one.ref, amount: one.balance }] };
+  let run = 0;
+  for (let i = 0; i < open.length; i++) {
+    run = round2(run + open[i].balance);
+    if (near(run)) return { exact: true, pick: open.slice(0, i + 1).map((b) => ({ id: b.id, ref: b.ref, amount: b.balance })) };
+    if (run > amt + 1) break;
+  }
+  let best: any[] | null = null, steps = 0;
+  const dfs = (i: number, sum: number, chosen: any[]) => {
+    if (best || ++steps > 100000) return;
+    if (chosen.length && near(sum)) { best = chosen.slice(); return; }
+    if (sum > amt + 1 || i >= open.length) return;
+    chosen.push(open[i]); dfs(i + 1, sum + open[i].balance, chosen); chosen.pop();
+    dfs(i + 1, sum, chosen);
+  };
+  if (open.length <= 30) dfs(0, 0, []);
+  if (best) return { exact: true, pick: (best as any[]).map((b) => ({ id: b.id, ref: b.ref, amount: b.balance })) };
+  let left = amt; const pick = [];
+  for (const b of open) { if (left <= 0.005) break; const use = round2(Math.min(left, b.balance)); pick.push({ id: b.id, ref: b.ref, amount: use }); left = round2(left - use); }
+  return { exact: false, pick };
+}
+
+async function bankSuggestions(lines: any[]) {
+  const customers = await q("SELECT id, name FROM customers WHERE active = 1");
+  const vendors = await q("SELECT id, name FROM vendors WHERE active = 1");
+  const rules = Object.fromEntries((await q("SELECT * FROM bank_rules")).map((r) => [r.key, r]));
+  const billsIn = (await billStatus("in")).rows.filter((b) => b.balance > 0.5);
+  const billsOut = (await billStatus("out")).rows.filter((b) => b.balance > 0.5);
+  const unbanked = await q(`SELECT p.id, p.direction, p.party_id, p.amount, to_char(p.pay_date, 'YYYY-MM-DD') AS day FROM payments p
+    WHERE NOT EXISTS (SELECT 1 FROM bank_lines b WHERE b.payment_id = p.id)`);
+  const byName = (list: any[], desc: string) => {
+    const dw = new Set(words(desc));
+    const flat = String(desc).toUpperCase().replace(/[^A-Z]/g, "");
+    let best: any = null, score = 0;
+    for (const c of list) {
+      const nw = words(c.name);
+      let sc = nw.filter((w) => dw.has(w)).length * 2;
+      const head = nw.join("").slice(0, 8);
+      if (head.length >= 6 && flat.includes(head)) sc += 3;
+      if (sc > score) { score = sc; best = c; }
+    }
+    return score >= 2 ? best : null;
+  };
+  const usedPay = new Set<number>();
+  return lines.map((l) => {
+    const credit = Number(l.credit) > 0;
+    const amt = round2(credit ? Number(l.credit) : Number(l.debit));
+    const dir = credit ? "in" : "out";
+    const rule = rules[ruleKey(l.description)];
+    // 1. a payment already typed in by hand for this amount (within a week)
+    const same = unbanked.find((p) => !usedPay.has(p.id) && p.direction === dir && Math.abs(Number(p.amount) - amt) <= 1
+      && Math.abs(daysBetween(p.day, l.txn_date)) <= 7);
+    if (same) { usedPay.add(same.id); return { kind: "link", payment_id: same.id, party_id: same.party_id, why: "A payment for this amount is already entered" }; }
+    // 2. customer / vendor by name, by a remembered rule, or by an exact bill amount
+    const list = credit ? customers : vendors, bills = credit ? billsIn : billsOut;
+    let party = rule && rule.kind === dir ? list.find((c) => c.id === rule.party_id) : null;
+    let why = party ? "Same as last time" : "";
+    if (!party) { party = byName(list, l.description); if (party) why = "Name found in the description"; }
+    if (!party) {
+      const hit = bills.find((b) => Math.abs(b.balance - amt) <= 1);
+      if (hit) { party = list.find((c) => c.id === hit.party_id); why = `Amount matches ${hit.ref}`; }
+    }
+    if (party) {
+      const m = matchAmount(bills.filter((b) => b.party_id === party.id), amt);
+      return { kind: dir, party_id: party.id, allocations: m.pick, exact: m.exact, why };
+    }
+    // 3. bank charges, salary, taxes ... from the words in the description
+    if (rule && (rule.kind === "expense" || rule.kind === "ignore")) return { kind: rule.kind, category: rule.category, why: "Same as last time" };
+    const cat = guessCategory(l.description, credit);
+    if (cat) return { kind: "expense", category: cat, why: "From the description" };
+    return { kind: "", why: "" };
+  });
+}
+
+route("GET", "/api/bank", async (c) => {
+  require(c, "accounts");
+  const status = new URL(c.req.url).searchParams.get("status") === "done" ? "done" : "new";
+  const lines = await q(`SELECT id, to_char(txn_date, 'YYYY-MM-DD') AS txn_date, description, ref, debit, credit, balance, status, payment_id, expense_id, posted_as
+    FROM bank_lines WHERE ${status === "new" ? "status = 'new'" : "status <> 'new'"} ORDER BY txn_date ${status === "new" ? "" : "DESC"}, id LIMIT 500`);
+  const suggestions = status === "new" ? await bankSuggestions(lines) : [];
+  return json({
+    lines: lines.map((l, i) => ({ ...l, suggest: suggestions[i] || null })),
+    customers: await q("SELECT id, name FROM customers WHERE active = 1 ORDER BY name"),
+    vendors: await q("SELECT id, name FROM vendors WHERE active = 1 ORDER BY name"),
+    categories: EXPENSE_CATEGORIES,
+    bills: { in: (await billStatus("in")).rows.filter((b) => b.balance > 0.5), out: (await billStatus("out")).rows.filter((b) => b.balance > 0.5) },
+  });
+});
+
+route("POST", "/api/bank/upload", async (c) => {
+  require(c, "accounts", "edit");
+  const rows = Array.isArray(c.body?.rows) ? c.body.rows.slice(0, 5000) : [];
+  let added = 0, skipped = 0;
+  for (const r of rows) {
+    const day = isoDate(r.date);
+    const debit = round2(Math.abs(num(r.debit) || 0)), credit = round2(Math.abs(num(r.credit) || 0));
+    if (!day || (!debit && !credit)) { skipped++; continue; }
+    const res = await q(`INSERT INTO bank_lines (txn_date, description, ref, debit, credit, balance, file_name, created_by)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING RETURNING id`,
+      [day, str(r.description).slice(0, 500), str(r.ref).slice(0, 100) || null, debit, credit, num(r.balance), str(c.body.file).slice(0, 200), c.user!.id]);
+    if (res.length) added++; else skipped++;
+  }
+  return json({ added, skipped });
+});
+
+route("POST", "/api/bank/post", async (c) => {
+  require(c, "accounts", "edit");
+  const items = Array.isArray(c.body?.items) ? c.body.items : [];
+  let done = 0;
+  const errors: string[] = [];
+  for (const it of items) {
+    try {
+      await tx(async (query) => {
+        const l = (await query("SELECT *, to_char(txn_date, 'YYYY-MM-DD') AS day FROM bank_lines WHERE id = $1 FOR UPDATE", [num(it.id)]))[0];
+        if (!l || l.status !== "new") return;
+        const credit = Number(l.credit) > 0, amt = round2(credit ? Number(l.credit) : Number(l.debit)), dir = credit ? "in" : "out";
+        const label = `${l.day} ${String(l.description).slice(0, 40)}`;
+        let postedAs = "", payId: number | null = null, expId: number | null = null, status = "done";
+        if (it.kind === "link") {
+          const pay = (await query("SELECT p.*, COALESCE(c.name, v.name) AS pname FROM payments p LEFT JOIN customers c ON p.direction = 'in' AND c.id = p.party_id LEFT JOIN vendors v ON p.direction = 'out' AND v.id = p.party_id WHERE p.id = $1", [num(it.payment_id)]))[0];
+          if (!pay || pay.direction !== dir) throw new Error(`${label}: that payment is not a match.`);
+          payId = pay.id; postedAs = `Matched to payment entered earlier · ${pay.pname}`;
+        } else if (it.kind === "in" || it.kind === "out") {
+          if (it.kind !== dir) throw new Error(`${label}: money ${credit ? "received" : "paid"} cannot be posted the other way.`);
+          const partyId = num(it.party_id);
+          const party = partyId ? (await query(`SELECT id, name FROM ${dir === "in" ? "customers" : "vendors"} WHERE id = $1`, [partyId]))[0] : null;
+          if (!party) throw new Error(`${label}: pick the ${dir === "in" ? "customer" : "vendor"}.`);
+          const allocs = (Array.isArray(it.allocations) ? it.allocations : []).map((a: any) => ({ bill_id: num(a.id ?? a.bill_id), amount: round2(num(a.amount) || 0) }))
+            .filter((a: any) => a.bill_id && a.amount > 0);
+          if (allocs.reduce((t: number, a: any) => t + a.amount, 0) > amt + 0.01) throw new Error(`${label}: bills add up to more than the amount.`);
+          payId = (await query("INSERT INTO payments (direction, party_id, pay_date, amount, mode, reference, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+            [dir, party.id, l.day, amt, payMode(l.description), l.ref || null, "Bank: " + String(l.description).slice(0, 200), c.user!.id]))[0].id;
+          for (const a of allocs) await query("INSERT INTO payment_allocations (payment_id, bill_id, amount) VALUES ($1, $2, $3)", [payId, a.bill_id, a.amount]);
+          postedAs = `${dir === "in" ? "Received from" : "Paid to"} ${party.name}${allocs.length ? "" : " (on account)"}`;
+          const key = ruleKey(l.description);
+          if (key) await query("INSERT INTO bank_rules (key, kind, party_id, category, updated_at) VALUES ($1, $2, $3, NULL, NOW()) ON CONFLICT (key) DO UPDATE SET kind = EXCLUDED.kind, party_id = EXCLUDED.party_id, category = NULL, updated_at = NOW()", [key, dir, party.id]);
+        } else if (it.kind === "expense") {
+          const cat = str(it.category);
+          if (!EXPENSE_CATEGORIES.includes(cat)) throw new Error(`${label}: pick what this is.`);
+          expId = (await query("INSERT INTO expenses (day, direction, category, amount, description, bank_line_id, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
+            [l.day, dir, cat, amt, String(l.description).slice(0, 300), l.id, c.user!.id]))[0].id;
+          postedAs = cat;
+          const key = ruleKey(l.description);
+          if (key) await query("INSERT INTO bank_rules (key, kind, party_id, category, updated_at) VALUES ($1, 'expense', NULL, $2, NOW()) ON CONFLICT (key) DO UPDATE SET kind = 'expense', party_id = NULL, category = EXCLUDED.category, updated_at = NOW()", [key, cat]);
+        } else if (it.kind === "ignore") {
+          status = "ignored"; postedAs = "Ignored";
+        } else return;
+        await query("UPDATE bank_lines SET status = $1, payment_id = $2, expense_id = $3, posted_as = $4 WHERE id = $5", [status, payId, expId, postedAs, l.id]);
+        done++;
+      });
+    } catch (e: any) { errors.push(e.message); }
+  }
+  return json({ done, errors });
+});
+
+route("POST", "/api/bank/undo/:id", async (c) => {
+  require(c, "accounts", "edit");
+  await tx(async (query) => {
+    const l = (await query("SELECT * FROM bank_lines WHERE id = $1 FOR UPDATE", [Number(c.params.id)]))[0] || fail(404, "Not found");
+    // a payment created from this line is removed; one that was typed in earlier and only matched is kept
+    if (l.payment_id && String(l.posted_as || "").indexOf("Matched to payment") !== 0) await query("DELETE FROM payments WHERE id = $1", [l.payment_id]);
+    if (l.expense_id) await query("DELETE FROM expenses WHERE id = $1", [l.expense_id]);
+    await query("UPDATE bank_lines SET status = 'new', payment_id = NULL, expense_id = NULL, posted_as = NULL WHERE id = $1", [l.id]);
+  });
+  return json({ ok: true });
+});
+
+route("GET", "/api/expenses", async (c) => {
+  require(c, "accounts");
+  const sp = new URL(c.req.url).searchParams;
+  const from = isoDate(sp.get("from")) || "1900-01-01", to = isoDate(sp.get("to")) || "2999-12-31";
+  const rows = await q(`SELECT id, to_char(day, 'YYYY-MM-DD') AS day, direction, category, amount, description FROM expenses
+    WHERE day BETWEEN $1 AND $2 ORDER BY day DESC, id DESC`, [from, to]);
+  const byCat = await q(`SELECT category, direction, SUM(amount) AS total, COUNT(*) AS n FROM expenses WHERE day BETWEEN $1 AND $2
+    GROUP BY category, direction ORDER BY total DESC`, [from, to]);
+  return json({ rows, byCat });
 });
 
 // ---------------------------------------------------------------- handler

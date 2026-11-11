@@ -253,7 +253,7 @@ export function morePages(ctx) {
       <div class="head"><h1>Accounts</h1>
         <div class="actions">
           ${editable ? `<a class="btn primary" href="#/payments/new?dir=in">＋ Payment received</a><a class="btn primary" href="#/payments/new?dir=out">＋ Payment made</a>` : ""}
-          <a class="btn" href="#/payments">📋 All payments</a>
+          <a class="btn" href="#/payments">📋 All payments</a><a class="btn" href="#/bank">🏦 Bank statement</a>
           <button class="btn" id="exx">⬇ Excel</button></div></div>
       <div class="quick">
         <a class="tile ${tab === "recv" ? "sel" : ""}" href="#/accounts"><b class="big">₹ ${money(total(d.receivable))}</b><span>To collect from customers</span></a>

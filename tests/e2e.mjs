@@ -273,6 +273,40 @@ ok(Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance) === r
   ok((await p.textContent("#next_note")).includes("R/26-007"), "new invoice shows the number it will get");
 }
 
+// bank statement: upload, suggestions, post, undo
+{
+  const XLSX = require("xlsx");
+  const post = (path, body) => p.evaluate(async ([u, bd]) => (await fetch(u, { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "ray-erp" }, body: JSON.stringify(bd) })).json(), [path, body]);
+  const inv = await post("/api/invoices/save", { inv_date: "2026-11-01", customer_id: 1, lines: [{ description: "Pipe", hsn: "87089900", uom: "NOS", qty: 20, rate: 100 }] });
+  const open = (await getJ("/api/bills/in?party=1")).rows.filter((b) => b.balance > 0.5);
+  const target = open.find((b) => b.id === inv.id);
+  const custName = (await getJ("/api/m/customers/1")).row.name.toUpperCase();
+  const rows = [["State Bank of India"], ["Account No", "62209116087"], [], ["Txn Date", "Value Date", "Description", "Ref No./Cheque No.", "Debit", "Credit", "Balance"],
+    ["02 Nov 2026", "02 Nov 2026", `BY TRANSFER-NEFT*${custName.slice(0, 22)}-UTR998877`, "UTR998877", "", String(target.balance), "346457.49"],
+    ["05 Nov 2026", "05 Nov 2026", "SMS CHRGS FOR QTR", "", "17.70", "", "346439.79"],
+    ["06 Nov 2026", "06 Nov 2026", "TO TRANSFER-SALARY NOV", "", "25000.00", "", "321439.79"],
+    ["07 Nov 2026", "07 Nov 2026", "BY CLG CHQ 004512 XYZ", "004512", "", "999.00", "322438.79"]];
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Statement");
+  const f = join(mkdtempSync(join(tmpdir(), "bank-")), "sbi_nov.xlsx"); XLSX.writeFile(wb, f);
+  await p.goto(U + "/#/bank"); await p.waitForSelector("#file");
+  await p.setInputFiles("#file", f); await p.waitForSelector("text=4 new entries loaded");
+  await p.setInputFiles("#file", f); await p.waitForSelector("text=0 new entries loaded");
+  ok(true, "bank upload skips entries already loaded");
+  const tr = (txt) => p.locator("table.bank tr", { hasText: txt });
+  ok(await tr("UTR998877").locator("[name=kind]").inputValue() === "in" && await tr("UTR998877").locator("[name=party]").inputValue() === "1", "bank receipt matched to the customer by name");
+  ok((await tr("UTR998877").textContent()).includes("Settles bills exactly"), "bank receipt settles the invoice exactly");
+  ok(await tr("FOR QTR").locator("[name=cat]").inputValue() === "Bank charges", "bank charges recognised");
+  ok(await tr("TRANSFER-SALARY").locator("[name=cat]").inputValue() === "Salary & wages", "salary recognised");
+  ok(!(await tr("004512").locator("[name=tick]").isChecked()), "unknown receipt left for the user");
+  await p.screenshot({ path: join(SHOTS, "bank.png"), fullPage: true });
+  await p.click("#post"); await p.waitForSelector("text=3 entries posted");
+  ok((await getJ("/api/bills/in?party=1")).rows.find((b) => b.id === inv.id).pay_status === "Paid", "posting the bank receipt marks the invoice paid");
+  ok((await getJ("/api/expenses")).byCat.some((c) => c.category === "Bank charges"), "bank charges posted as expense");
+  await p.goto(U + "/#/bank?status=done"); await p.waitForSelector("text=Posted as");
+  await p.locator("tr", { hasText: "UTR998877" }).locator("[data-undo]").click(); await p.waitForSelector("text=back in To match");
+  ok((await getJ("/api/bills/in?party=1")).rows.find((b) => b.id === inv.id).pay_status !== "Paid", "undo removes the payment again");
+}
+
 // users + roles
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "ravi.store"); await p.fill("[name=full_name]", "Ravi"); await p.selectOption("[name=role]", "Store");
