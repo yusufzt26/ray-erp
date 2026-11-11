@@ -88,6 +88,55 @@ await p.waitForSelector("text=Read from PDF", { timeout: 20000 });
 ok(await p.isVisible("text=Vendor (by GSTIN)"), "vendor matched by GSTIN");
 ok(await p.inputValue("#lines tr:first-child [name=product_id]") !== "", "RM tube matched by name");
 
+await p.click("button.primary:has-text('Save')");
+await p.waitForSelector("text=VIN-00001 saved", { timeout: 15000 });
+ok(true, "vendor invoice saved");
+
+// stock
+const stockOf = (id) => p.evaluate(async (id) => (await (await fetch("/api/stock")).json()).rows.find((r) => r.id === id), id);
+const fg0 = await stockOf(1);
+ok(Number(fg0.dispatched) > 0, "sales invoice takes stock out");
+const rm0 = await stockOf(2);
+ok(Number(rm0.received) > 0, "vendor invoice adds stock");
+await p.goto(U + "/#/stock/entry"); await p.waitForSelector("text=Opening stock");
+await p.selectOption("#l1 tr:first-child [name=product_id]", "1");
+await p.fill("#l1 tr:first-child [name=qty]", "5000");
+await p.click("button:has-text('Save entry')");
+await p.waitForSelector("text=Stock entry saved");
+ok(Number((await stockOf(1)).balance) === 5000 - Number(fg0.dispatched), "opening stock added");
+await p.goto(U + "/#/stock/entry"); await p.waitForSelector("text=Production done");
+await p.click("text=Production done");
+await p.selectOption("#l1 tr:first-child [name=product_id]", "1"); await p.fill("#l1 tr:first-child [name=qty]", "100");
+await p.selectOption("#l2 tr:first-child [name=product_id]", "2"); await p.fill("#l2 tr:first-child [name=qty]", "45");
+await p.screenshot({ path: join(SHOTS, "stock_entry.png"), fullPage: true });
+await p.click("button:has-text('Save entry')");
+await p.waitForSelector("text=Stock entry saved");
+ok(Number((await stockOf(2)).balance) === Number(rm0.balance) - 45, "production uses up raw material");
+await p.screenshot({ path: join(SHOTS, "stock.png"), fullPage: true });
+await p.goto(U + "/#/stock/1"); await p.waitForSelector("text=in stock now");
+ok((await p.textContent("main")).includes("Dispatched") && (await p.textContent("main")).includes("Production"), "item stock history");
+await p.screenshot({ path: join(SHOTS, "stock_item.png"), fullPage: true });
+
+// sales register
+await p.goto(U + "/#/sales-register"); await p.waitForSelector("text=Total sales");
+ok((await p.textContent("main")).includes("1,13,150.00"), "sales register taxable value");
+await p.screenshot({ path: join(SHOTS, "sales_register.png"), fullPage: true });
+const [dl2] = await Promise.all([p.waitForEvent("download"), p.click("#exx")]);
+ok(dl2.suggestedFilename().startsWith("sales_register_"), "sales register excel");
+
+// accounts
+await p.goto(U + "/#/accounts"); await p.waitForSelector("text=To collect from customers");
+ok((await p.textContent("main")).includes("1,33,517.00"), "receivable shows invoice total");
+await p.goto(U + "/#/payments/new?dir=in&party=1"); await p.waitForSelector("text=Outstanding now");
+await p.fill("[name=amount]", "33517"); await p.fill("[name=reference]", "UTR123");
+await p.click("button:has-text('Save payment')");
+await p.waitForSelector("text=Payment saved");
+ok((await p.textContent("main")).includes("1,00,000.00"), "statement balance after payment");
+await p.screenshot({ path: join(SHOTS, "statement.png"), fullPage: true });
+await p.goto(U + "/#/accounts?tab=pay"); await p.waitForSelector("text=To pay to vendors");
+ok((await p.textContent("main")).includes("Polytube"), "payable lists vendor");
+await p.screenshot({ path: join(SHOTS, "accounts.png"), fullPage: true });
+
 // users + roles
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "ravi.store"); await p.fill("[name=full_name]", "Ravi"); await p.selectOption("[name=role]", "Store");
@@ -104,6 +153,10 @@ await p.goto(U + "/#/users"); await p.waitForSelector("text=Not allowed");
 ok(true, "store blocked from users");
 await p.goto(U + "/#/invoices"); await p.waitForSelector("text=R/26-005");
 ok(!(await p.isVisible("text=New Invoice")), "store sees invoices read-only");
+await p.goto(U + "/#/accounts"); await p.waitForSelector("text=Not allowed");
+ok(true, "store blocked from accounts");
+await p.goto(U + "/#/stock"); await p.waitForSelector("text=Stock entry");
+ok(true, "store can make stock entries");
 ok(errors.length === 0, "no page errors " + errors.join(" | "));
 await b.close();
 console.log(failed ? `${failed} FAILED` : "ALL PASSED");

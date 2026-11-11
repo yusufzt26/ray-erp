@@ -1,6 +1,7 @@
 import { DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES } from "./fields.js";
 import { readPdf } from "./pdfread.js";
 import { invoicePages } from "./invoice.js";
+import { morePages } from "./more.js";
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -48,6 +49,10 @@ function layout(body) {
     ${can("customer_po") || can("vendor_invoice") || can("sales_invoice") ? '<div class="sec">Documents</div>' : ""}
     ${Object.entries(DOC_TYPES).filter(([k]) => can(k)).map(([k, d]) => `<a href="#/d/${k}" class="${on("#/d/" + k)}">${d.icon} ${d.title}</a>`).join("")}
     ${can("sales_invoice") ? `<a href="#/invoices" class="${on("#/invoices")}">🧾 Sales Invoices</a>` : ""}
+    ${can("stock") || can("sales_invoice") || can("accounts") ? '<div class="sec">Stock & Accounts</div>' : ""}
+    ${can("stock") ? `<a href="#/stock" class="${on("#/stock")}">📊 Stock</a>` : ""}
+    ${can("sales_invoice") ? `<a href="#/sales-register" class="${on("#/sales-register")}">📈 Sales Register</a>` : ""}
+    ${can("accounts") ? `<a href="#/accounts" class="${on("#/accounts") || on("#/payments")}">💰 Accounts</a>` : ""}
     <div class="sec">Masters</div>
     ${Object.entries(MASTERS).filter(([k]) => can(k)).map(([k, m]) => `<a href="#/m/${k}" class="${on("#/m/" + k)}">${m.icon} ${m.title}</a>`).join("")}
     ${can("users") ? `<div class="sec">Admin</div>
@@ -102,6 +107,8 @@ pages.dashboard = async () => {
   const d = await api("GET", "/api/dashboard");
   const quick = [
     can("sales_invoice", "edit") && ["#/invoices/new", "🧾 New Sales Invoice", "From a customer PO"],
+    can("stock", "edit") && ["#/stock/entry", "📊 Stock Entry", "Opening, production, issue"],
+    can("accounts", "edit") && ["#/payments/new?dir=in", "💰 Payment Received", "From a customer"],
     can("customer_po", "edit") && ["#/d/customer_po/upload", "⬆ Upload Customer PO", "PDF → auto-fill"],
     can("vendor_invoice", "edit") && ["#/d/vendor_invoice/upload", "⬆ Upload Vendor Invoice", "PDF → auto-fill"],
     can("products", "edit") && ["#/m/products/new", "＋ New Product", "Item code is automatic"],
@@ -686,6 +693,7 @@ pages.settings = async () => {
 pages.forbidden = () => layout(`<h1>Not allowed</h1><p>Your role does not have access to this page. Ask the Admin if you need it.</p><p><a class="btn" href="#/">Back to Home</a></p>`);
 pages.notFound = () => layout(`<h1>Page not found</h1><p><a class="btn" href="#/">Back to Home</a></p>`);
 
+const more = morePages({ api, layout, can, flash, $, $$, errorBox, busy, forbidden: () => pages.forbidden() });
 const inv = invoicePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 
 // ------------------------------------------------------------------ router
@@ -719,6 +727,19 @@ async function route() {
       if (p[1] === "new") return await inv.form(null);
       if (p[2] === "print") return await inv.print(p[1]);
       return await inv.form(p[1]);
+    }
+    if (p[0] === "stock") {
+      if (!can("stock")) return pages.forbidden();
+      if (!p[1]) return await more.stockList();
+      if (p[1] === "entry") return await more.stockEntry();
+      if (p[1] === "moves") return await more.stockMoves();
+      return await more.stockItem(p[1]);
+    }
+    if (p[0] === "sales-register") return can("sales_invoice") ? await more.salesRegister() : pages.forbidden();
+    if (p[0] === "accounts" || p[0] === "payments") {
+      if (!can("accounts")) return pages.forbidden();
+      if (p[0] === "payments") return p[1] === "new" ? await more.paymentForm() : await more.payments();
+      return p[1] ? await more.statement(p[1], p[2]) : await more.accounts();
     }
     if (p[0] === "users") return p[1] ? await pages.userForm(p[1]) : await pages.users();
     if (p[0] === "permissions") return await pages.permissions();

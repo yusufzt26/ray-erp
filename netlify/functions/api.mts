@@ -123,6 +123,11 @@ route("GET", "/api/dashboard", async (c) => {
     counts.push({ label: (DOC_TYPES as any)[k].title, n: Number((await one("SELECT COUNT(*) AS n FROM documents WHERE doc_type = $1", [k])).n), href: `#/d/${k}` });
   if (c.perms.sales_invoice !== "none")
     counts.push({ label: "Sales Invoices", n: Number((await one("SELECT COUNT(*) AS n FROM invoices")).n), href: "#/invoices" });
+  if (c.perms.accounts && c.perms.accounts !== "none") {
+    const sum = (rows: any[]) => Math.round(rows.reduce((t, r) => t + Math.max(0, Number(r.balance)), 0));
+    counts.push({ label: "To collect (₹)", n: sum(await q(RECV_SQL)).toLocaleString("en-IN"), href: "#/accounts" });
+    counts.push({ label: "To pay (₹)", n: sum(await q(PAY_SQL)).toLocaleString("en-IN"), href: "#/accounts?tab=pay" });
+  }
   const recent = allowed.length
     ? await q("SELECT id, doc_type, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_name, total_amount, status FROM documents WHERE doc_type = ANY($1) ORDER BY id DESC LIMIT 10", [allowed])
     : [];
@@ -603,6 +608,183 @@ route("PUT", "/api/invoice-counter", async (c) => {
   const last = num(c.body.last);
   if (!/^\d{2}$/.test(fy) || last === null || last < 0) fail(400, "Give the year (e.g. 26) and the last number used.");
   await q("INSERT INTO counters (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value", [`invoice_${fy}`, last]);
+  return json({ ok: true });
+});
+
+// ---------------------------------------------------------------- stock
+// Balance = manual entries + vendor invoice receipts - sales invoice dispatches.
+const STOCK_KINDS: Record<string, number> = { Opening: 1, Production: 1, Issue: -1, Adjustment: 0 };
+
+route("GET", "/api/stock", async (c) => {
+  require(c, "stock");
+  const sp = new URL(c.req.url).searchParams;
+  const qs = str(sp.get("q")), cat = str(sp.get("cat"));
+  const params: unknown[] = [];
+  let where = "p.active = 1";
+  if (qs) { params.push(`%${qs}%`); where += ` AND (p.code ILIKE $${params.length} OR p.name ILIKE $${params.length} OR p.customer_part_no ILIKE $${params.length} OR p.drawing_no ILIKE $${params.length})`; }
+  if (cat && (PRODUCT_CATEGORIES as any)[cat]) { params.push(cat); where += ` AND p.category = $${params.length}`; }
+  const rows = await q(`SELECT p.id, p.code, p.name, p.category, p.uom, p.customer_part_no,
+      COALESCE(m.q, 0) AS manual, COALESCE(r.q, 0) AS received, COALESCE(s.q, 0) AS dispatched,
+      COALESCE(m.q, 0) + COALESCE(r.q, 0) - COALESCE(s.q, 0) AS balance
+    FROM products p
+    LEFT JOIN (SELECT product_id, SUM(qty) AS q FROM stock_moves GROUP BY product_id) m ON m.product_id = p.id
+    LEFT JOIN (SELECT l.product_id, SUM(l.qty) AS q FROM document_lines l JOIN documents d ON d.id = l.document_id
+      WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled' AND l.product_id IS NOT NULL GROUP BY l.product_id) r ON r.product_id = p.id
+    LEFT JOIN (SELECT l.product_id, SUM(l.qty) AS q FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
+      WHERE i.status <> 'Cancelled' AND l.product_id IS NOT NULL GROUP BY l.product_id) s ON s.product_id = p.id
+    WHERE ${where} ORDER BY p.code`, params);
+  return json({ rows });
+});
+
+route("GET", "/api/stock/moves", async (c) => {
+  require(c, "stock");
+  const rows = await q(`SELECT m.batch, to_char(MIN(m.move_date), 'YYYY-MM-DD') AS move_date, MIN(m.kind) FILTER (WHERE m.kind <> 'Consumed') AS kind,
+      MIN(m.ref) AS ref, MIN(m.notes) AS notes, COUNT(*) AS lines,
+      string_agg(p.code || ' ' || (CASE WHEN m.qty > 0 THEN '+' ELSE '' END) || m.qty, ', ' ORDER BY m.id) AS items, MIN(u.full_name) AS by_user
+    FROM stock_moves m JOIN products p ON p.id = m.product_id LEFT JOIN users u ON u.id = m.created_by
+    GROUP BY m.batch ORDER BY MAX(m.id) DESC LIMIT 200`);
+  return json({ rows });
+});
+
+route("GET", "/api/stock/item/:id", async (c) => {
+  require(c, "stock");
+  const id = Number(c.params.id);
+  const product = await one("SELECT id, code, name, category, uom, customer_part_no, drawing_no FROM products WHERE id = $1", [id]);
+  if (!product) fail(404, "Item not found");
+  const rows = await q(`SELECT * FROM (
+      SELECT to_char(m.move_date, 'YYYY-MM-DD') AS day, m.kind AS kind, m.ref AS ref, m.notes AS party, m.qty AS qty, m.id AS sort2, NULL::text AS href
+        FROM stock_moves m WHERE m.product_id = $1
+      UNION ALL
+      SELECT to_char(COALESCE(d.doc_date, d.created_at::date), 'YYYY-MM-DD'), 'Received', d.ref_no || COALESCE(' / ' || d.doc_no, ''), d.party_name, l.qty, l.id, '#/d/vendor_invoice/' || d.id
+        FROM document_lines l JOIN documents d ON d.id = l.document_id
+        WHERE l.product_id = $1 AND d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled'
+      UNION ALL
+      SELECT to_char(i.inv_date, 'YYYY-MM-DD'), 'Dispatched', i.inv_no, cu.name, -l.qty, l.id, '#/invoices/' || i.id
+        FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id LEFT JOIN customers cu ON cu.id = i.customer_id
+        WHERE l.product_id = $1 AND i.status <> 'Cancelled'
+    ) x ORDER BY day, sort2`, [id]);
+  let bal = 0;
+  for (const r of rows) { bal += Number(r.qty); r.balance = Math.round(bal * 1000) / 1000; }
+  return json({ product, rows, balance: bal });
+});
+
+route("POST", "/api/stock/move", async (c) => {
+  require(c, "stock", "edit");
+  const b = c.body;
+  const kind = str(b.kind);
+  if (!(kind in STOCK_KINDS)) fail(400, "Pick what kind of entry this is.");
+  const day = isoDate(b.date) || fail(400, "Date is required.");
+  const clean = (arr: any) => (Array.isArray(arr) ? arr : []).slice(0, 200)
+    .map((l: any) => ({ product_id: num(l.product_id), qty: num(l.qty) })).filter((l: any) => l.product_id && l.qty);
+  const lines = clean(b.lines);
+  if (!lines.length) fail(400, "Add at least one item with a quantity.");
+  const consume = kind === "Production" ? clean(b.consume) : [];
+  const sign = STOCK_KINDS[kind];
+  const batch = randomUUID().slice(0, 8);
+  await tx(async (query) => {
+    for (const l of lines)
+      await query("INSERT INTO stock_moves (move_date, product_id, qty, kind, batch, ref, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        [day, l.product_id, sign ? sign * Math.abs(l.qty) : l.qty, kind, batch, str(b.ref) || null, str(b.notes) || null, c.user!.id]);
+    for (const l of consume)
+      await query("INSERT INTO stock_moves (move_date, product_id, qty, kind, batch, ref, notes, created_by) VALUES ($1,$2,$3,'Consumed',$4,$5,$6,$7)",
+        [day, l.product_id, -Math.abs(l.qty), batch, str(b.ref) || null, str(b.notes) || null, c.user!.id]);
+  });
+  return json({ ok: true, batch });
+});
+
+route("DELETE", "/api/stock/batch/:batch", async (c) => {
+  require(c, "stock", "edit");
+  await q("DELETE FROM stock_moves WHERE batch = $1", [c.params.batch]);
+  return json({ ok: true });
+});
+
+// ---------------------------------------------------------------- sales register
+route("GET", "/api/reports/sales", async (c) => {
+  require(c, "sales_invoice");
+  const sp = new URL(c.req.url).searchParams;
+  const from = isoDate(sp.get("from")) || "1900-01-01", to = isoDate(sp.get("to")) || "2999-12-31";
+  const rows = await q(`SELECT i.id, i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, to_char(i.inv_date, 'YYYY-MM') AS month,
+      cu.name AS customer, i.gstin, i.po_no, i.subtotal, i.cgst, i.sgst, i.igst, i.total
+    FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id
+    WHERE i.status <> 'Cancelled' AND i.inv_date BETWEEN $1 AND $2 ORDER BY i.inv_date, i.id`, [from, to]);
+  return json({ rows });
+});
+
+// ---------------------------------------------------------------- accounts
+// Receivable = issued sales invoices - payments in. Payable = vendor invoices - payments out.
+const RECV_SQL = `SELECT cu.id, cu.code, cu.name, COALESCE(b.amt, 0) AS billed, COALESCE(p.amt, 0) AS settled,
+    COALESCE(b.amt, 0) - COALESCE(p.amt, 0) AS balance, b.last_bill
+  FROM customers cu
+  LEFT JOIN (SELECT customer_id, SUM(total) AS amt, to_char(MAX(inv_date), 'YYYY-MM-DD') AS last_bill FROM invoices WHERE status <> 'Cancelled' GROUP BY customer_id) b ON b.customer_id = cu.id
+  LEFT JOIN (SELECT party_id, SUM(amount) AS amt FROM payments WHERE direction = 'in' GROUP BY party_id) p ON p.party_id = cu.id
+  WHERE b.amt IS NOT NULL OR p.amt IS NOT NULL ORDER BY balance DESC, cu.name`;
+const PAY_SQL = `SELECT v.id, v.code, v.name, COALESCE(b.amt, 0) AS billed, COALESCE(p.amt, 0) AS settled,
+    COALESCE(b.amt, 0) - COALESCE(p.amt, 0) AS balance, b.last_bill
+  FROM vendors v
+  LEFT JOIN (SELECT party_id, SUM(COALESCE(total_amount, subtotal, 0)) AS amt, to_char(MAX(doc_date), 'YYYY-MM-DD') AS last_bill FROM documents
+    WHERE doc_type = 'vendor_invoice' AND status <> 'Cancelled' GROUP BY party_id) b ON b.party_id = v.id
+  LEFT JOIN (SELECT party_id, SUM(amount) AS amt FROM payments WHERE direction = 'out' GROUP BY party_id) p ON p.party_id = v.id
+  WHERE b.amt IS NOT NULL OR p.amt IS NOT NULL ORDER BY balance DESC, v.name`;
+
+route("GET", "/api/accounts/summary", async (c) => {
+  require(c, "accounts");
+  return json({ receivable: await q(RECV_SQL), payable: await q(PAY_SQL) });
+});
+
+route("GET", "/api/accounts/statement/:dir/:id", async (c) => {
+  require(c, "accounts");
+  const dir = c.params.dir === "out" ? "out" : "in";
+  const id = Number(c.params.id);
+  const party = await one(`SELECT id, code, name, gstin, payment_terms FROM ${dir === "in" ? "customers" : "vendors"} WHERE id = $1`, [id]);
+  if (!party) fail(404, "Not found");
+  const bills = dir === "in"
+    ? `SELECT to_char(inv_date, 'YYYY-MM-DD') AS day, 'Invoice' AS kind, inv_no AS ref, po_no AS notes, total AS debit, 0 AS credit, id AS sort2, '#/invoices/' || id AS href, NULL::int AS pay_id
+        FROM invoices WHERE customer_id = $1 AND status <> 'Cancelled'`
+    : `SELECT to_char(COALESCE(doc_date, created_at::date), 'YYYY-MM-DD'), 'Invoice', COALESCE(doc_no, ref_no), ref_no, COALESCE(total_amount, subtotal, 0), 0, id, '#/d/vendor_invoice/' || id, NULL::int
+        FROM documents WHERE party_id = $1 AND doc_type = 'vendor_invoice' AND status <> 'Cancelled'`;
+  const rows = await q(`SELECT * FROM (${bills}
+      UNION ALL SELECT to_char(pay_date, 'YYYY-MM-DD'), 'Payment', COALESCE(mode, '') || COALESCE(' ' || reference, ''), notes, 0, amount, 1000000000 + id, NULL, id
+        FROM payments WHERE direction = $2 AND party_id = $1) x ORDER BY day, sort2`, [id, dir]);
+  let bal = 0;
+  for (const r of rows) { bal += Number(r.debit) - Number(r.credit); r.balance = Math.round(bal * 100) / 100; }
+  return json({ party, rows, balance: Math.round(bal * 100) / 100 });
+});
+
+route("GET", "/api/payments/options", async (c) => {
+  require(c, "accounts", "edit");
+  return json({
+    customers: await q("SELECT id, code, name FROM customers WHERE active = 1 ORDER BY name"),
+    vendors: await q("SELECT id, code, name FROM vendors WHERE active = 1 ORDER BY name"),
+  });
+});
+
+route("GET", "/api/payments", async (c) => {
+  require(c, "accounts");
+  const rows = await q(`SELECT p.id, p.direction, to_char(p.pay_date, 'YYYY-MM-DD') AS pay_date, p.amount, p.mode, p.reference, p.notes, p.party_id,
+      CASE WHEN p.direction = 'in' THEN cu.name ELSE v.name END AS party
+    FROM payments p LEFT JOIN customers cu ON p.direction = 'in' AND cu.id = p.party_id LEFT JOIN vendors v ON p.direction = 'out' AND v.id = p.party_id
+    ORDER BY p.pay_date DESC, p.id DESC LIMIT 300`);
+  return json({ rows });
+});
+
+route("POST", "/api/payments", async (c) => {
+  require(c, "accounts", "edit");
+  const b = c.body;
+  const dir = b.direction === "out" ? "out" : "in";
+  const partyId = num(b.party_id) || fail(400, dir === "in" ? "Pick the customer." : "Pick the vendor.");
+  const day = isoDate(b.pay_date) || fail(400, "Date is required.");
+  const amount = num(b.amount);
+  if (!amount || amount <= 0) fail(400, "Enter the amount.");
+  const exists = await one(`SELECT id FROM ${dir === "in" ? "customers" : "vendors"} WHERE id = $1`, [partyId]);
+  if (!exists) fail(400, "Party not found.");
+  const row = await one("INSERT INTO payments (direction, party_id, pay_date, amount, mode, reference, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+    [dir, partyId, day, amount, str(b.mode) || null, str(b.reference) || null, str(b.notes) || null, c.user!.id]);
+  return json({ id: row.id });
+});
+
+route("DELETE", "/api/payments/:id", async (c) => {
+  require(c, "accounts", "edit");
+  await q("DELETE FROM payments WHERE id = $1", [Number(c.params.id)]);
   return json({ ok: true });
 });
 

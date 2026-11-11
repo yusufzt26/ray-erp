@@ -8,7 +8,9 @@ export const MODULES = {
   vendors: "Vendors",
   products: "Products",
   customer_po: "Customer POs",
-  sales_invoice: "Sales Invoices",
+  sales_invoice: "Sales Invoices & Sales Register",
+  stock: "Stock",
+  accounts: "Accounts (receivable / payable)",
   vendor_invoice: "Vendor Invoices",
   users: "Users & Roles",
 };
