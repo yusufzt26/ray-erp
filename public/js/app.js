@@ -2,6 +2,7 @@ import { DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES } from "
 import { readPdf } from "./pdfread.js";
 import { invoicePages } from "./invoice.js";
 import { morePages } from "./more.js";
+import { DASHBOARDS, defaultDash, renderDash } from "./dash.js";
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -118,7 +119,6 @@ pages.login = () => {
 };
 
 pages.dashboard = async () => {
-  const d = await api("GET", "/api/dashboard");
   const quick = [
     can("sales_invoice", "edit") && ["#/invoices/new", "🧾 New Sales Invoice", "From a customer PO"],
     can("stock", "edit") && ["#/stock/entry", "📊 Stock Entry", "Opening, production, issue"],
@@ -126,19 +126,17 @@ pages.dashboard = async () => {
     can("customer_po", "edit") && ["#/d/customer_po/upload", "⬆ Upload Customer PO", "PDF → auto-fill"],
     can("vendor_invoice", "edit") && ["#/d/vendor_invoice/upload", "⬆ Upload Vendor Invoice", "PDF → auto-fill"],
     can("products", "edit") && ["#/m/products/new", "＋ New Product", "Item code is automatic"],
-    can("customers", "edit") && ["#/m/customers/new", "＋ New Customer", ""],
-    can("vendors", "edit") && ["#/m/vendors/new", "＋ New Vendor", ""],
   ].filter(Boolean);
+  const views = Object.entries(DASHBOARDS).filter(([k, v]) => (k === "admin" ? S.user.role === "Admin" : can(v.perm))).map(([k]) => k);
+  const asked = new URLSearchParams(location.hash.split("?")[1] || "").get("view");
+  const view = views.includes(asked) ? asked : views.includes(defaultDash(S.user.role)) ? defaultDash(S.user.role) : views[0];
+  const d = view ? await api("GET", `/api/dash/${view}`) : null;
   layout(`
-    <h1>Welcome, ${h(S.user.full_name)}</h1>
+    <div class="head"><h1>Welcome, ${h(S.user.full_name)}</h1>
+      ${views.length > 1 ? `<div class="tabs dtabs">${views.map((k) => `<a href="#/?view=${k}" class="${k === view ? "on" : ""}">${DASHBOARDS[k].icon} ${DASHBOARDS[k].label}</a>`).join("")}</div>` : ""}</div>
     ${S.defaultPw ? `<div class="flash error">You are using the default admin password. <a href="#/password">Change it now</a>.</div>` : ""}
-    <div class="quick">${quick.map(([href, t, s]) => `<a class="tile action" href="${href}"><b>${t}</b><span>${s}</span></a>`).join("")}</div>
-    <div class="quick">${d.counts.map((c) => `<a class="tile" href="${c.href}"><b class="big">${c.n}</b><span>${h(c.label)}</span></a>`).join("")}</div>
-    ${d.recent.length ? `<h2>Recent documents</h2><div class="scroll"><table class="grid">
-      <tr><th>Ref</th><th>Type</th><th>Party</th><th>No.</th><th>Date</th><th class="num">Total</th><th>Status</th></tr>
-      ${d.recent.map((r) => `<tr class="click" data-href="#/d/${r.doc_type}/${r.id}"><td>${h(r.ref_no)}</td><td>${h(DOC_TYPES[r.doc_type].singular)}</td>
-        <td>${h(r.party_name)}</td><td>${h(r.doc_no)}</td><td>${h(r.doc_date)}</td><td class="num">${money(r.total_amount)}</td><td>${h(r.status)}</td></tr>`).join("")}
-    </table></div>` : ""}`);
+    <div class="quick slim">${quick.map(([href, t, s]) => `<a class="tile action" href="${href}"><b>${t}</b><span>${s}</span></a>`).join("")}</div>
+    ${d ? renderDash(view, d) : '<p class="muted">Use the menu on the left to get started.</p>'}`);
 };
 
 pages.password = () => {

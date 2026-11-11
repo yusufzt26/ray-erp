@@ -738,6 +738,127 @@ route("PUT", "/api/bom/:id", async (c) => {
   return json({ ok: true });
 });
 
+// ---------------------------------------------------------------- department dashboards
+const DASH_VIEWS: Record<string, string> = { admin: "", sales: "sales_invoice", purchase: "vendor_invoice", store: "stock" };
+const todayIso = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10); // India time
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86400e3);
+
+/** Unpaid invoices per party after applying payments oldest-first; returns aging buckets and per-party rows. */
+function aging(bills: any[], paid: Record<string, number>, today: string) {
+  const buckets = { "0-30 days": 0, "31-60 days": 0, "61-90 days": 0, "Over 90 days": 0 };
+  const parties: Record<string, any> = {};
+  const left: Record<string, number> = { ...paid };
+  for (const b of bills) {                                   // bills sorted by date
+    const k = String(b.party_id);
+    const use = Math.min(left[k] || 0, Number(b.amount));
+    left[k] = (left[k] || 0) - use;
+    const due = Math.round((Number(b.amount) - use) * 100) / 100;
+    if (due <= 0.5) continue;
+    const age = daysBetween(b.day, today);
+    const bucket = age <= 30 ? "0-30 days" : age <= 60 ? "31-60 days" : age <= 90 ? "61-90 days" : "Over 90 days";
+    (buckets as any)[bucket] += due;
+    const p = (parties[k] ||= { id: b.party_id, name: b.name, due: 0, oldest: age, bills: 0 });
+    p.due += due; p.bills++; p.oldest = Math.max(p.oldest, age);
+  }
+  return { buckets, parties: Object.values(parties).sort((a: any, b: any) => b.due - a.due) };
+}
+
+route("GET", "/api/dash/:view", async (c) => {
+  if (!c.user) fail(401, "Please log in.");
+  const view = c.params.view;
+  if (!(view in DASH_VIEWS)) fail(404, "Unknown dashboard");
+  if (view === "admin" ? c.user!.role !== "Admin" : c.perms[DASH_VIEWS[view]] === "none") fail(403, "Not allowed");
+  const today = todayIso();
+  const [y, m] = today.split("-").map(Number);
+  const fyStart = `${m >= 4 ? y : y - 1}-04-01`;
+  const months: string[] = [];
+  for (let i = 11; i >= 0; i--) { const d = new Date(Date.UTC(y, m - 1 - i, 1)); months.push(d.toISOString().slice(0, 7)); }
+  const from12 = months[0] + "-01";
+  const thisMonth = today.slice(0, 7), lastMonth = months[10];
+  const out: any = { today, fyStart, months };
+  const wantSales = view === "admin" || view === "sales";
+  const wantPurch = view === "admin" || view === "purchase";
+
+  if (wantSales) {
+    const rows = await q(`SELECT to_char(inv_date, 'YYYY-MM') AS m, SUM(subtotal) AS taxable, SUM(total) AS total, COUNT(*) AS n
+      FROM invoices WHERE status <> 'Cancelled' AND inv_date >= $1 GROUP BY 1`, [from12]);
+    const by = Object.fromEntries(rows.map((r) => [r.m, r]));
+    out.salesByMonth = months.map((mm) => Number(by[mm]?.taxable || 0));
+    out.salesThisMonth = Number(by[thisMonth]?.taxable || 0);
+    out.salesLastMonth = Number(by[lastMonth]?.taxable || 0);
+    out.invoicesThisMonth = Number(by[thisMonth]?.n || 0);
+    out.salesFY = Number((await one("SELECT COALESCE(SUM(subtotal), 0) AS s FROM invoices WHERE status <> 'Cancelled' AND inv_date >= $1", [fyStart])).s);
+    out.topCustomers = await q(`SELECT cu.name AS label, SUM(i.subtotal) AS value, COUNT(*) AS n FROM invoices i JOIN customers cu ON cu.id = i.customer_id
+      WHERE i.status <> 'Cancelled' AND i.inv_date >= $1 GROUP BY cu.name ORDER BY value DESC LIMIT 6`, [fyStart]);
+    out.topItems = await q(`SELECT COALESCE(p.name, l.description) AS label, SUM(l.amount) AS value, SUM(l.qty) AS qty FROM invoice_lines l
+      JOIN invoices i ON i.id = l.invoice_id LEFT JOIN products p ON p.id = l.product_id
+      WHERE i.status <> 'Cancelled' AND i.inv_date >= $1 GROUP BY 1 ORDER BY value DESC LIMIT 8`, [fyStart]);
+    const bills = await q(`SELECT i.customer_id AS party_id, cu.name, to_char(i.inv_date, 'YYYY-MM-DD') AS day, i.total AS amount
+      FROM invoices i JOIN customers cu ON cu.id = i.customer_id WHERE i.status <> 'Cancelled' ORDER BY i.inv_date, i.id`);
+    const paid = Object.fromEntries((await q("SELECT party_id, SUM(amount) AS s FROM payments WHERE direction = 'in' GROUP BY party_id")).map((r) => [String(r.party_id), Number(r.s)]));
+    const ag = aging(bills, paid, today);
+    out.recvAging = ag.buckets; out.recvParties = ag.parties.slice(0, 10);
+    out.toCollect = ag.parties.reduce((t: number, p: any) => t + p.due, 0);
+    out.openPOs = Number((await one("SELECT COUNT(*) AS n FROM documents WHERE doc_type = 'customer_po' AND status IN ('Open', 'Partly Dispatched')")).n);
+    out.receivedThisMonth = Number((await one("SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE direction = 'in' AND to_char(pay_date, 'YYYY-MM') = $1", [thisMonth])).s);
+  }
+  if (wantPurch) {
+    const rows = await q(`SELECT to_char(doc_date, 'YYYY-MM') AS m, SUM(COALESCE(subtotal, total_amount, 0)) AS taxable, SUM(COALESCE(total_amount, subtotal, 0)) AS total, COUNT(*) AS n
+      FROM documents WHERE doc_type = 'vendor_invoice' AND status <> 'Cancelled' AND doc_date >= $1 GROUP BY 1`, [from12]);
+    const by = Object.fromEntries(rows.map((r) => [r.m, r]));
+    out.purchByMonth = months.map((mm) => Number(by[mm]?.taxable || 0));
+    out.purchThisMonth = Number(by[thisMonth]?.taxable || 0);
+    out.billsThisMonth = Number(by[thisMonth]?.n || 0);
+    out.purchFY = Number((await one("SELECT COALESCE(SUM(COALESCE(subtotal, total_amount, 0)), 0) AS s FROM documents WHERE doc_type = 'vendor_invoice' AND status <> 'Cancelled' AND doc_date >= $1", [fyStart])).s);
+    out.topVendors = await q(`SELECT v.name AS label, SUM(COALESCE(d.subtotal, d.total_amount, 0)) AS value FROM documents d JOIN vendors v ON v.id = d.party_id
+      WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled' AND d.doc_date >= $1 GROUP BY v.name ORDER BY value DESC LIMIT 6`, [fyStart]);
+    out.spendByCategory = await q(`SELECT COALESCE(p.category, 'Other') AS label, SUM(l.amount) AS value FROM document_lines l
+      JOIN documents d ON d.id = l.document_id LEFT JOIN products p ON p.id = l.product_id
+      WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled' AND d.doc_date >= $1 GROUP BY 1 ORDER BY value DESC`, [fyStart]);
+    const bills = await q(`SELECT d.party_id, v.name, to_char(COALESCE(d.doc_date, d.created_at::date), 'YYYY-MM-DD') AS day, COALESCE(d.total_amount, d.subtotal, 0) AS amount
+      FROM documents d JOIN vendors v ON v.id = d.party_id WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled' ORDER BY 3, d.id`);
+    const paid = Object.fromEntries((await q("SELECT party_id, SUM(amount) AS s FROM payments WHERE direction = 'out' GROUP BY party_id")).map((r) => [String(r.party_id), Number(r.s)]));
+    const ag = aging(bills, paid, today);
+    out.payAging = ag.buckets; out.payParties = ag.parties.slice(0, 10);
+    out.toPay = ag.parties.reduce((t: number, p: any) => t + p.due, 0);
+    out.recentBills = await q(`SELECT id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_name, total_amount, status FROM documents
+      WHERE doc_type = 'vendor_invoice' ORDER BY doc_date DESC NULLS LAST, id DESC LIMIT 8`);
+  }
+  if (view === "store" || view === "admin") {
+    const stock = await q(`SELECT p.id, p.code, p.name, p.category, p.uom,
+        COALESCE(m.q, 0) + COALESCE(r.q, 0) - COALESCE(s.q, 0) AS balance
+      FROM products p
+      LEFT JOIN (SELECT product_id, SUM(qty) AS q FROM stock_moves GROUP BY product_id) m ON m.product_id = p.id
+      LEFT JOIN (SELECT l.product_id, SUM(l.qty) AS q FROM document_lines l JOIN documents d ON d.id = l.document_id
+        WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled' AND l.product_id IS NOT NULL GROUP BY l.product_id) r ON r.product_id = p.id
+      LEFT JOIN (SELECT l.product_id, SUM(l.qty) AS q FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
+        WHERE i.status <> 'Cancelled' AND l.product_id IS NOT NULL GROUP BY l.product_id) s ON s.product_id = p.id
+      WHERE p.active = 1 ORDER BY p.code`);
+    out.stock = stock.map((r) => ({ ...r, balance: Number(r.balance) }));
+    const disp = await q(`SELECT to_char(i.inv_date, 'YYYY-MM') AS m, SUM(l.qty) AS q FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
+      WHERE i.status <> 'Cancelled' AND i.inv_date >= $1 GROUP BY 1`, [from12]);
+    const dby = Object.fromEntries(disp.map((r) => [r.m, Number(r.q)]));
+    out.dispatchByMonth = months.map((mm) => dby[mm] || 0);
+    const made = await q(`SELECT to_char(move_date, 'YYYY-MM') AS m, SUM(qty) AS q FROM stock_moves WHERE kind = 'Production' AND move_date >= $1 GROUP BY 1`, [from12]);
+    const mby = Object.fromEntries(made.map((r) => [r.m, Number(r.q)]));
+    out.productionByMonth = months.map((mm) => mby[mm] || 0);
+    out.receiptsThisMonth = Number((await one(`SELECT COUNT(DISTINCT d.id) AS n FROM documents d WHERE d.doc_type = 'vendor_invoice' AND d.status <> 'Cancelled'
+      AND to_char(d.doc_date, 'YYYY-MM') = $1`, [thisMonth])).n);
+    out.recentMoves = await q(`SELECT to_char(MIN(m.move_date), 'YYYY-MM-DD') AS move_date, MIN(m.kind) FILTER (WHERE m.kind <> 'Consumed') AS kind,
+        string_agg(p.code || ' ' || (CASE WHEN m.qty > 0 THEN '+' ELSE '' END) || m.qty, ', ' ORDER BY m.id) AS items
+      FROM stock_moves m JOIN products p ON p.id = m.product_id GROUP BY m.batch ORDER BY MAX(m.id) DESC LIMIT 6`);
+  }
+  if (view === "admin") {
+    out.users = Number((await one("SELECT COUNT(*) AS n FROM users WHERE active = 1")).n);
+    out.counts = {
+      customers: Number((await one("SELECT COUNT(*) AS n FROM customers WHERE active = 1")).n),
+      vendors: Number((await one("SELECT COUNT(*) AS n FROM vendors WHERE active = 1")).n),
+      products: Number((await one("SELECT COUNT(*) AS n FROM products WHERE active = 1")).n),
+    };
+  }
+  return json(out);
+});
+
 // ---------------------------------------------------------------- load existing data (e.g. Vyapar reports)
 // The browser reads the Excel reports and sends clean records. Everything is matched
 // to what already exists, so loading the same file twice adds nothing new.
