@@ -738,6 +738,115 @@ route("PUT", "/api/bom/:id", async (c) => {
   return json({ ok: true });
 });
 
+// ---------------------------------------------------------------- load existing data (e.g. Vyapar reports)
+// The browser reads the Excel reports and sends clean records. Everything is matched
+// to what already exists, so loading the same file twice adds nothing new.
+route("POST", "/api/admin/load", async (c) => {
+  if (c.user?.role !== "Admin") fail(403, "Only Admin can load data.");
+  const b = c.body;
+  const arr = (v: any, max: number) => (Array.isArray(v) ? v.slice(0, max) : []);
+  const done = { customers: 0, vendors: 0, products: 0, sales: 0, purchases: 0, payments: 0, skipped: 0 };
+  const ownState = ((await one("SELECT value FROM settings WHERE key = 'company_gstin'"))?.value || "27").slice(0, 2);
+  await tx(async (query) => {
+    // parties: match by GSTIN, else by name
+    const partyIds: Record<string, Record<string, number>> = { customers: {}, vendors: {} };
+    for (const master of ["customers", "vendors"] as const) {
+      for (const p of arr(b[master], 2000)) {
+        const { values } = cleanMaster(master, { ...p, active: true });
+        if (!values.name) continue;
+        let row = values.gstin ? (await query(`SELECT id FROM ${master} WHERE gstin = $1 LIMIT 1`, [values.gstin]))[0] : null;
+        row ||= (await query(`SELECT id FROM ${master} WHERE lower(name) = lower($1) LIMIT 1`, [values.name]))[0];
+        if (row) {
+          const fill = Object.fromEntries(Object.entries(values).filter(([k, v]) => v !== null && v !== "" && k !== "name" && k !== "active"));
+          const cur = (await query(`SELECT * FROM ${master} WHERE id = $1`, [row.id]))[0];
+          await updateMaster(query, master, row.id, Object.fromEntries(Object.entries(fill).filter(([k]) => cur[k] === null || cur[k] === "")));
+        } else { row = await insertMaster(query, master, values); done[master]++; }
+        partyIds[master][str(p.key)] = row.id;
+      }
+    }
+    // products: match by customer material code, then drawing no, then name
+    const productIds: Record<string, number> = {};
+    for (const p of arr(b.products, 5000)) {
+      const { values } = cleanMaster("products", { ...p, active: true });
+      if (!values.name) continue;
+      let row = values.customer_part_no ? (await query("SELECT id FROM products WHERE customer_part_no = $1 LIMIT 1", [values.customer_part_no]))[0] : null;
+      if (!row && values.drawing_no) row = (await query("SELECT id FROM products WHERE drawing_no = $1 AND category = $2 LIMIT 1", [values.drawing_no, values.category]))[0];
+      row ||= (await query("SELECT id FROM products WHERE lower(name) = lower($1) LIMIT 1", [values.name]))[0];
+      if (!row) { row = await insertMaster(query, "products", values); done.products++; }
+      productIds[str(p.key)] = row.id;
+    }
+    const payment = async (dir: string, partyId: number, day: string, amount: number, ref: string, mode: string, notes: string) => {
+      if (!amount || amount <= 0) return;
+      const ex = (await query("SELECT id FROM payments WHERE direction = $1 AND party_id = $2 AND reference = $3", [dir, partyId, ref]))[0];
+      if (ex) return;
+      await query("INSERT INTO payments (direction, party_id, pay_date, amount, mode, reference, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        [dir, partyId, day, round2(amount), mode, ref, notes, c.user!.id]);
+      done.payments++;
+    };
+    // sales invoices
+    const maxNo: Record<string, number> = {};
+    for (const s of arr(b.sales, 5000)) {
+      const custId = partyIds.customers[str(s.party_key)];
+      const day = isoDate(s.date);
+      if (!custId || !day || !str(s.inv_no)) { done.skipped++; continue; }
+      const m = str(s.inv_no).match(/^[A-Z]*\/(\d{2})-(\d+)$/);
+      if (m) maxNo[m[1]] = Math.max(maxNo[m[1]] || 0, Number(m[2]));
+      let inv = (await query("SELECT id FROM invoices WHERE inv_no = $1", [s.inv_no]))[0];
+      if (!inv) {
+        const cust = (await query("SELECT * FROM customers WHERE id = $1", [custId]))[0];
+        const lines = arr(s.lines, 200).map((l: any) => ({ ...l, qty: num(l.qty) || 0, rate: num(l.rate) || 0 }));
+        const subtotal = round2(lines.reduce((t: number, l: any) => t + l.qty * l.rate, 0));
+        const tax = round2(num(s.tax) ?? 0);
+        const igstType = str(cust.gstin).slice(0, 2) && str(cust.gstin).slice(0, 2) !== ownState;
+        const total = num(s.total) ?? round2(subtotal + tax);
+        inv = (await query(`INSERT INTO invoices (inv_no, inv_date, customer_id, po_no, supplier_code, bill_to, ship_to, gstin, pan, tax_type, gst_rate,
+            subtotal, cgst, sgst, igst, total, delivery_condition, payment_terms, packing, status, created_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'[]','Issued',$19) RETURNING id`,
+          [s.inv_no, day, custId, str(s.po_no) || null, cust.supplier_code, [cust.name, cust.address, [cust.city, cust.state].filter(Boolean).join(", ")].filter(Boolean).join("\n"),
+            "", cust.gstin, cust.pan, igstType ? "IGST" : "CGST_SGST", num(s.gst_rate) ?? 18, subtotal,
+            igstType ? 0 : round2(tax / 2), igstType ? 0 : round2(tax - round2(tax / 2)), igstType ? tax : 0, total, cust.delivery_condition || "", cust.payment_terms || "", c.user!.id]))[0];
+        for (let i = 0; i < lines.length; i++) {
+          const l = lines[i];
+          await query(`INSERT INTO invoice_lines (invoice_id, line_no, product_id, material_code, part_no, description, hsn, uom, qty, rate, disc, amount)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11)`,
+            [inv.id, i + 1, productIds[str(l.product_key)] || null, str(l.material_code), str(l.part_no), str(l.description), str(l.hsn), str(l.uom).toUpperCase(), l.qty, l.rate, round2(l.qty * l.rate)]);
+        }
+        done.sales++;
+      } else done.skipped++;
+      await payment("in", custId, day, num(s.received) || 0, `Old record ${s.inv_no}`, str(s.pay_mode) || "As per old records", "Received before the ERP (payment date not in the old records)");
+    }
+    for (const [fy, n] of Object.entries(maxNo))
+      await query("INSERT INTO counters (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = GREATEST(counters.value, EXCLUDED.value)", [`invoice_${fy}`, n]);
+    // vendor invoices
+    for (const p of arr(b.purchases, 5000)) {
+      const venId = partyIds.vendors[str(p.party_key)];
+      const day = isoDate(p.date);
+      if (!venId || !day || !str(p.doc_no)) { done.skipped++; continue; }
+      const ven = (await query("SELECT name, gstin FROM vendors WHERE id = $1", [venId]))[0];
+      let doc = (await query("SELECT id FROM documents WHERE doc_type = 'vendor_invoice' AND party_id = $1 AND lower(doc_no) = lower($2)", [venId, p.doc_no]))[0];
+      if (!doc) {
+        const lines = arr(p.lines, 300).map((l: any) => ({ ...l, qty: num(l.qty) || 0, rate: num(l.rate) || 0 }));
+        const subtotal = round2(lines.reduce((t: number, l: any) => t + l.qty * l.rate, 0));
+        const total = num(p.total) ?? subtotal;
+        const refNo = await nextCode(query, "doc_vendor_invoice", "VIN");
+        doc = (await query(`INSERT INTO documents (doc_type, ref_no, doc_no, doc_date, party_id, party_name, party_gstin, subtotal, tax_amount, total_amount, notes, status, created_by)
+          VALUES ('vendor_invoice',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+          [refNo, p.doc_no, day, venId, ven.name, ven.gstin, subtotal, round2(total - subtotal), total, "Loaded from old records",
+            (num(p.balance) || 0) <= 0.01 && (num(p.paid) || 0) > 0 ? "Paid" : "Received", c.user!.id]))[0];
+        for (let i = 0; i < lines.length; i++) {
+          const l = lines[i];
+          await query(`INSERT INTO document_lines (document_id, line_no, product_id, party_part_no, description, hsn, qty, uom, rate, amount)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            [doc.id, i + 1, productIds[str(l.product_key)] || null, str(l.part_no), str(l.description), str(l.hsn), l.qty, str(l.uom).toUpperCase(), l.rate, round2(l.qty * l.rate)]);
+        }
+        done.purchases++;
+      } else done.skipped++;
+      await payment("out", venId, day, num(p.paid) || 0, `Old record ${p.doc_no}`, str(p.pay_mode) || "As per old records", "Paid before the ERP (payment date not in the old records)");
+    }
+  });
+  return json({ done });
+});
+
 // ---------------------------------------------------------------- sales register
 route("GET", "/api/reports/sales", async (c) => {
   require(c, "sales_invoice");

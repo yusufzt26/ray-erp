@@ -390,5 +390,62 @@ export function morePages(ctx) {
     };
   }
 
-  return { bomCard, stockList, stockItem, stockMoves, stockEntry, salesRegister, accounts, statement, payments, paymentForm };
+  // ============================================================== LOAD OLD RECORDS (Admin)
+  async function loadData() {
+    if (ctx.S.user.role !== "Admin") return ctx.forbidden();
+    layout(`
+      <div class="head"><h1>Load old records</h1></div>
+      <div class="card">
+        <p>Bring in your records from your old billing software, e.g. Vyapar <b>Sale Report</b> and <b>Purchase Report</b> Excel exports.
+          Customers, vendors, items, sales invoices, purchase bills and payments are created and linked automatically.</p>
+        <p class="muted small">Nothing is saved until you press <b>Load into ERP</b>. Loading the same file again does not create duplicates.</p>
+        <label>Excel files (.xls / .xlsx) <input type="file" id="files" multiple accept=".xls,.xlsx,.csv"></label>
+      </div>
+      <div id="out"></div>`);
+    $("#files").onchange = async (e) => {
+      const files = [...e.target.files];
+      if (!files.length) return;
+      const { readOldRecords } = await import("./loaddata.js");
+      const wbs = [];
+      for (const f of files) wbs.push({ name: f.name, wb: XLSX.read(await f.arrayBuffer(), { type: "array" }) });
+      const { found, bundle } = readOldRecords(XLSX, wbs);
+      const B = bundle;
+      const sum = (l, k) => l.reduce((t, r) => t + Number(r[k] || 0), 0);
+      const cat = (c) => B.products.filter((p) => p.category === c).length;
+      $("#out").innerHTML = `
+        <div class="card"><h2>What was found</h2>
+          <ul class="small">${found.map((f) => `<li>${h(f)}</li>`).join("")}</ul>
+          <div class="quick">
+            <div class="tile"><b class="big">${B.customers.length}</b><span>Customers</span></div>
+            <div class="tile"><b class="big">${B.vendors.length}</b><span>Vendors</span></div>
+            <div class="tile"><b class="big">${B.products.length}</b><span>Items (FG ${cat("FG")} · RM ${cat("RM")} · BO ${cat("BO")} · PK ${cat("PK")})</span></div>
+            <div class="tile"><b class="big">${B.sales.length}</b><span>Sales invoices · ₹ ${money(sum(B.sales, "total"))}<br>to collect ₹ ${money(sum(B.sales, "balance"))}</span></div>
+            <div class="tile"><b class="big">${B.purchases.length}</b><span>Purchase bills · ₹ ${money(sum(B.purchases, "total"))}<br>to pay ₹ ${money(sum(B.purchases, "balance"))}</span></div>
+          </div>
+          ${B.sales.length ? `<p class="small">Invoice numbers become <b>${h(B.sales[0].inv_no)}</b> … <b>${h(B.sales[B.sales.length - 1].inv_no)}</b> (old ${h(B.sales[0].old_no)} … ${h(B.sales[B.sales.length - 1].old_no)}). New invoices continue after the last one.</p>` : ""}
+          <div class="buttons"><button class="btn primary" id="go">⬆ Load into ERP</button></div>
+          <div id="res"></div>
+        </div>
+        <div class="card"><h2>Customers</h2><div class="scroll"><table class="grid"><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Phone</th></tr>
+          ${B.customers.map((p) => `<tr><td>${h(p.name)}</td><td>${h(p.gstin)}</td><td>${h(p.state)}</td><td>${h(p.phone)}</td></tr>`).join("")}</table></div>
+        <h2>Vendors</h2><div class="scroll"><table class="grid"><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Phone</th></tr>
+          ${B.vendors.map((p) => `<tr><td>${h(p.name)}</td><td>${h(p.gstin)}</td><td>${h(p.state)}</td><td>${h(p.phone)}</td></tr>`).join("")}</table></div>
+        <h2>Items</h2><div class="scroll"><table class="grid"><tr><th>Cat</th><th>Name</th><th>Customer Code</th><th>Drawing No</th><th>UOM</th><th>HSN</th><th class="num">Rate</th></tr>
+          ${B.products.map((p) => `<tr><td>${h(p.category)}</td><td>${h(p.name)}</td><td>${h(p.customer_part_no)}</td><td>${h(p.drawing_no)}</td><td>${h(p.uom)}</td><td>${h(p.hsn)}</td>
+            <td class="num">${money(p.sale_rate ?? p.purchase_rate)}</td></tr>`).join("")}</table></div></div>`;
+      $("#go").onclick = async () => {
+        const btn = $("#go");
+        busy(btn, true, "Loading… please wait");
+        try {
+          const { done } = await api("POST", "/api/admin/load", B);
+          $("#res").innerHTML = `<div class="flash ok">Loaded: ${done.customers} new customers, ${done.vendors} new vendors, ${done.products} new items,
+            ${done.sales} sales invoices, ${done.purchases} purchase bills, ${done.payments} payments.${done.skipped ? ` ${done.skipped} were already in the ERP and were skipped.` : ""}
+            <br><a href="#/accounts">See Accounts</a> · <a href="#/sales-register">Sales Register</a> · <a href="#/m/customers">Customers</a></div>`;
+          btn.remove();
+        } catch (err) { $("#res").innerHTML = errorBox([err.message]); busy(btn, false); }
+      };
+    };
+  }
+
+  return { loadData, bomCard, stockList, stockItem, stockMoves, stockEntry, salesRegister, accounts, statement, payments, paymentForm };
 }

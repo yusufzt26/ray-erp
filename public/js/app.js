@@ -70,7 +70,8 @@ function layout(body) {
     ${can("users") ? `<div class="sec">Admin</div>
       <a href="#/users" class="${on("#/users")}">🔑 Users</a>
       <a href="#/permissions" class="${on("#/permissions")}">🛡️ Role Permissions</a>
-      ${S.user.role === "Admin" ? `<a href="#/settings" class="${on("#/settings")}">⚙️ Company Settings</a>` : ""}` : ""}`;
+      ${S.user.role === "Admin" ? `<a href="#/settings" class="${on("#/settings")}">⚙️ Company Settings</a>
+        <a href="#/load-data" class="${on("#/load-data")}">📂 Load Old Records</a>` : ""}` : ""}`;
   document.body.innerHTML = `
     <header class="top">
       <button class="menu-btn" aria-label="Menu" onclick="document.body.classList.toggle('nav-open')">☰</button>
@@ -707,7 +708,7 @@ pages.settings = async () => {
 pages.forbidden = () => layout(`<h1>Not allowed</h1><p>Your role does not have access to this page. Ask the Admin if you need it.</p><p><a class="btn" href="#/">Back to Home</a></p>`);
 pages.notFound = () => layout(`<h1>Page not found</h1><p><a class="btn" href="#/">Back to Home</a></p>`);
 
-const more = morePages({ api, layout, can, flash, $, $$, errorBox, busy, forbidden: () => pages.forbidden() });
+const more = morePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 const inv = invoicePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 
 // ------------------------------------------------------------------ router
@@ -749,6 +750,7 @@ async function route() {
       if (p[1] === "moves") return await more.stockMoves();
       return await more.stockItem(p[1]);
     }
+    if (p[0] === "load-data") return await more.loadData();
     if (p[0] === "sales-register") return can("sales_invoice") ? await more.salesRegister() : pages.forbidden();
     if (p[0] === "accounts" || p[0] === "payments") {
       if (!can("accounts")) return pages.forbidden();
