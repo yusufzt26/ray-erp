@@ -4,8 +4,9 @@ const dmy = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
 const money = (n) => (n === null || n === undefined ? "" : "₹ " + Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const qty = (n) => Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 3 });
 
-export async function linksPanel(api, kind, id) {
+export async function linksPanel(api, kind, id, onProgress) {
   const { items, progress } = await api("GET", `/api/links/${kind}/${id}`);
+  if (onProgress && progress) onProgress(progress);
   const chain = items.length > 1 ? `<div class="chain">${items.map((it, i) => `${i ? '<span class="arrow">→</span>' : ""}
     <a class="link-card ${it.current ? "current" : ""}" href="${it.href}"><small>${h(it.label)}</small><b>${h(it.ref)}</b>
       ${it.no ? `<small>${h(it.no)}</small>` : ""}<small>${dmy(it.day)} · ${h(it.status)}${it.amount ? ` · ${money(it.amount)}` : ""}</small></a>`).join("")}</div>`

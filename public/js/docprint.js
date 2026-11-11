@@ -1,6 +1,7 @@
 // A4 print for quotations, sales orders, delivery challans, purchase orders and GRNs.
 import { DOC_TYPES } from "./fields.js";
 import { amountInWords } from "./invoice.js";
+import { fitPages } from "./printfit.js";
 
 const h = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const nl = (v) => h(v).replace(/\n/g, "<br>");
@@ -19,7 +20,7 @@ export async function docPrint({ api, layout, S }, type, id) {
   const partyBlock = [party?.name || doc.party_name, party?.address, cityLine, party?.contact_person ? `Kind Attn : ${party.contact_person}${party.phone ? " - " + party.phone : ""}` : ""].filter(Boolean).join("\n");
   const sub = lines.reduce((t, l) => t + Number(l.amount || 0), 0);
   const total = Number(doc.total_amount || sub);
-  const blanks = Math.max(0, 10 - lines.length);
+  const blanks = Math.max(0, 6 - lines.length);
   const cols = priced ? 8 : 6;
   layout(`
     <div class="head noprint"><h1>${h(d.singular)} <span class="code">${h(doc.ref_no)}</span></h1>
@@ -53,4 +54,5 @@ export async function docPrint({ api, layout, S }, type, id) {
         <tr class="foot"><td colspan="${priced ? 5 : 3}">${type === "quotation" || type === "customer_po" ? `<b>TERMS &amp; CONDITIONS :</b><br>${nl(s.invoice_terms)}` : type === "grn" ? "<b>Received in good condition.</b><br>Checked by :" : "<b>Receiver's signature &amp; stamp</b>"}</td>
           <td colspan="${priced ? 3 : 3}" class="c sign"><b>For ${h(s.company_name)}</b><div class="gap"></div>Authorised Signatory</td></tr>
       </table></div></div>`);
+  fitPages();
 }

@@ -173,6 +173,8 @@ await p.goto(U + "/#/d/customer_po/" + soId); await p.waitForSelector("text=Link
 await p.waitForSelector(".link-card");
 const chainTxt = await p.textContent("#links");
 ok(["QTN-00001", "CPO-00002", "DC-00001", "R/26-006"].every((t) => chainTxt.includes(t)) && chainTxt.includes("40"), "linked documents chain + pending 40");
+await p.waitForSelector("#lines .prog");
+ok((await p.textContent("#lines")).includes("Pending 40") && (await p.textContent("#lines")).includes("Dispatched 60"), "sales order items show dispatched and pending qty");
 await p.screenshot({ path: join(SHOTS, "doc_links.png"), fullPage: true });
 await p.click("text=Make Invoice"); await p.waitForSelector("text=New Sales Invoice"); await p.waitForSelector("#lines tr");
 ok(await p.inputValue("#lines tr:first-child [name=qty]") === "40", "invoice from sales order takes only the balance");

@@ -51,6 +51,7 @@ function billToFor(c) {
 }
 
 import { linksPanel } from "./links.js";
+import { fitPages } from "./printfit.js";
 
 // ---------------------------------------------------------------- pages
 export function invoicePages(ctx) {
@@ -314,29 +315,29 @@ export function invoicePages(ctx) {
     });
     const pkRows = [];
     for (let i = 0; i < pk.length; i += 2) pkRows.push([pk[i], pk[i + 1]]);
-    const minRows = Math.max(0, 10 - lines.length);
+    const minRows = Math.max(0, 6 - lines.length);
     const igst = inv.tax_type === "IGST";
     return `<div class="inv-page">
     <table class="inv">
-      <colgroup><col style="width:5%"><col style="width:13%"><col style="width:27%"><col style="width:10%"><col style="width:6%"><col style="width:9%"><col style="width:9%"><col style="width:6%"><col style="width:15%"></colgroup>
+      <colgroup><col style="width:5%"><col style="width:11%"><col style="width:32%"><col style="width:9%"><col style="width:6%"><col style="width:8%"><col style="width:9%"><col style="width:5%"><col style="width:15%"></colgroup>
       <tr class="b"><td colspan="3">${h(copy)}</td><td colspan="4" class="c small">(U/S 31 of CGST Act &amp; SGST Act R.W.Sec. 20 of IGST Act)</td><td colspan="2" class="c">GST Tax Invoice</td></tr>
       <tr><td colspan="4" class="logo-cell"><img src="/logo.png" alt="Ray Precicomp"><div class="tag">${nl(s.company_tagline)}</div></td>
         <td colspan="5" class="from"><b>M/S ${h(s.company_name)}</b><br>${nl(s.company_address)}<br>Email: ${h(s.company_email)}<br>Mobile: ${h(s.company_mobile)}</td></tr>
-      <tr><td colspan="2"><b>GSTIN : ${h(s.company_gstin)}</b></td><td colspan="2">W.E.F. ${h(s.company_gst_wef)}</td>
-        <td colspan="3">State Code : ${h(s.company_state)}</td><td colspan="2">PAN No. ${h(s.company_pan)}</td></tr>
-      <tr class="hl"><td colspan="2">Invoice No. :</td><td colspan="2"><b>${h(inv.inv_no)}</b></td><td colspan="3">Invoice Date :</td><td colspan="2" class="c"><b>${dmy(inv.inv_date)}</b></td></tr>
-      <tr class="hl"><td colspan="2">PO Number</td><td><b>${h(inv.po_no)}</b></td><td>PO Date: <b>${dmy(inv.po_date)}</b></td><td colspan="3">Supplier Code :</td><td colspan="2" class="c"><b>${h(inv.supplier_code)}</b></td></tr>
-      ${inv.eway?.ewb_no || inv.eway?.vehicle_no ? `<tr class="hl"><td colspan="2">E-way Bill No :</td><td colspan="2"><b>${h(inv.eway.ewb_no || "")}</b>${inv.eway.ewb_date ? " dt " + dmy(inv.eway.ewb_date) : ""}</td><td colspan="3">Vehicle No :</td><td colspan="2" class="c"><b>${h(inv.eway.vehicle_no || "")}</b></td></tr>` : ""}
+      <tr class="nw"><td colspan="3"><b>GSTIN : ${h(s.company_gstin)}</b> <small>(W.E.F. ${h(s.company_gst_wef)})</small></td>
+        <td colspan="3">State Code : ${h(s.company_state)}</td><td colspan="3">PAN No. ${h(s.company_pan)}</td></tr>
+      <tr class="hl nw"><td colspan="2">Invoice No. :</td><td colspan="3"><b>${h(inv.inv_no)}</b></td><td colspan="2">Invoice Date :</td><td colspan="2" class="c"><b>${dmy(inv.inv_date)}</b></td></tr>
+      <tr class="hl nw"><td colspan="2">PO No. / Date :</td><td colspan="3"><b>${h(inv.po_no)}</b>${inv.po_date ? ` &nbsp;dt. <b>${dmy(inv.po_date)}</b>` : ""}</td><td colspan="2">Supplier Code :</td><td colspan="2" class="c"><b>${h(inv.supplier_code)}</b></td></tr>
+      ${inv.eway?.ewb_no || inv.eway?.vehicle_no ? `<tr class="hl nw"><td colspan="2">E-way Bill No :</td><td colspan="3"><b>${h(inv.eway.ewb_no || "")}</b>${inv.eway.ewb_date ? " dt " + dmy(inv.eway.ewb_date) : ""}</td><td colspan="2">Vehicle No :</td><td colspan="2" class="c"><b>${h(inv.eway.vehicle_no || "")}</b></td></tr>` : ""}
       <tr class="addr"><td colspan="4"><b>Bill To :</b><br>${nl(inv.bill_to)}</td><td colspan="5"><b>Ship To :</b><br>${nl(inv.ship_to)}</td></tr>
-      <tr class="hl"><td colspan="2">GSTIN : <b>${h(inv.gstin)}</b></td><td colspan="2">PAN : <b>${h(inv.pan)}</b></td><td colspan="5">GSTIN : <b>${h(inv.gstin)}</b></td></tr>
+      <tr class="hl nw"><td colspan="3">GSTIN : <b>${h(inv.gstin)}</b></td><td colspan="2">PAN : <b>${h(inv.pan)}</b></td><td colspan="4">GSTIN : <b>${h(inv.gstin)}</b></td></tr>
       <tr class="th"><td>S No</td><td>MATERIAL CODE</td><td>DESCRIPTION</td><td>HSN</td><td>UOM</td><td>Qty</td><td>Rate</td><td>Disc</td><td>AMOUNT</td></tr>
       ${lines.map((l, i) => `<tr class="item"><td class="c">${i + 1}</td><td class="c">${h(l.material_code)}</td><td>${h(l.description)}</td><td class="c">${h(l.hsn)}</td>
         <td class="c">${h(l.uom)}</td><td class="c">${qtyFmt(l.qty)}</td><td class="r">${money(l.rate)}</td><td class="c">${l.disc ? qtyFmt(l.disc) + "%" : "0"}</td><td class="r">${money(l.amount)}</td></tr>`).join("")}
       ${Array.from({ length: minRows }, () => '<tr class="item empty"><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join("")}
-      <tr><td colspan="2" rowspan="2">Total Value in Words :</td><td colspan="3" rowspan="2"><b>${amountInWords(inv.total)}</b></td><td colspan="2"><b>Sub Total</b></td><td></td><td class="r"><b>${money(inv.subtotal)}</b></td></tr>
+      <tr><td colspan="2" rowspan="2" class="nw">Total Value in Words :</td><td colspan="3" rowspan="2"><b>${amountInWords(inv.total)}</b></td><td colspan="2"><b>Sub Total</b></td><td></td><td class="r"><b>${money(inv.subtotal)}</b></td></tr>
       <tr><td colspan="2"><b>SGST</b></td><td class="c">${igst ? "" : inv.gst_rate / 2 + "%"}</td><td class="r">${igst ? "" : money(inv.sgst)}</td></tr>
-      <tr><td colspan="2">Delivery Condition :</td><td colspan="3">${h(inv.delivery_condition)}</td><td colspan="2"><b>CGST</b></td><td class="c">${igst ? "" : inv.gst_rate / 2 + "%"}</td><td class="r">${igst ? "" : money(inv.cgst)}</td></tr>
-      <tr><td colspan="2">Payment Terms :</td><td colspan="3">${h(inv.payment_terms)}</td><td colspan="2"><b>IGST</b></td><td class="c">${igst ? inv.gst_rate + "%" : ""}</td><td class="r">${igst ? money(inv.igst) : ""}</td></tr>
+      <tr><td colspan="2" class="nw">Delivery Condition :</td><td colspan="3">${h(inv.delivery_condition)}</td><td colspan="2"><b>CGST</b></td><td class="c">${igst ? "" : inv.gst_rate / 2 + "%"}</td><td class="r">${igst ? "" : money(inv.cgst)}</td></tr>
+      <tr><td colspan="2" class="nw">Payment Terms :</td><td colspan="3">${h(inv.payment_terms)}</td><td colspan="2"><b>IGST</b></td><td class="c">${igst ? inv.gst_rate + "%" : ""}</td><td class="r">${igst ? money(inv.igst) : ""}</td></tr>
       <tr class="grand"><td colspan="5"><b>Packing Information</b></td><td colspan="3"><b>GRAND TOTAL</b></td><td class="r"><b>${money(inv.total)}</b></td></tr>
       ${pkRows.map(([a, b]) => `<tr><td colspan="2">${h(a.box)}</td><td colspan="2">${h(a.text)}</td><td colspan="2">${h(b?.box || "")}</td><td colspan="3">${h(b?.text || "")}</td></tr>`).join("")}
       <tr><td colspan="9" class="decl">${h(s.invoice_declaration)}</td></tr>
@@ -376,6 +377,7 @@ export function invoicePages(ctx) {
           <a class="btn" href="#/invoices">← Back</a></div></div>
       <p class="muted noprint">Tip: in the print window choose "Save as PDF" to email it. Paper size A4.</p>
       <div class="print-area">${mode === "labels" ? labelsHtml(inv, lines, s) : copies.map((c) => invoiceHtml(inv, lines, s, c)).join("")}</div>`);
+    fitPages();
   }
 
   return { list, form, print };

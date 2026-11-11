@@ -13,6 +13,7 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const money = (n) => (n === null || n === undefined || n === "" ? "" : Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const numStr = (n) => (n === null || n === undefined || n === "" ? "" : String(+Number(n).toFixed(4)));
+const qtyTxt = (n) => Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 3 });
 const num = (v) => { const n = parseFloat(String(v ?? "").replace(/,/g, "")); return Number.isNaN(n) ? 0 : n; };
 
 let S = { user: null, perms: {}, settings: {}, defaultPw: false };
@@ -524,7 +525,19 @@ pages.docForm = async (type, id, preset = null) => {
     </form>
     <div id="links"></div>
     ${doc.id && editable ? '<button class="btn danger small" id="del">Delete</button>' : ""}`);
-  if (doc.id) linksPanel(api, "doc", doc.id).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
+  const DONE_WORD = { customer_po: "Dispatched", purchase_order: "Received", delivery_challan: "Invoiced", grn: "Billed" };
+  const showProgress = (progress) => {
+    // Under each quantity: how much is already done and how much is still pending.
+    $$("#lines tr").forEach((tr, i) => {
+      const l = progress[i];
+      const cell = $("[name=qty]", tr)?.parentElement;
+      if (!l || !cell || $(".prog", cell) || !DONE_WORD[type]) return;
+      cell.insertAdjacentHTML("beforeend", Number(l.pending) > 0
+        ? `<small class="prog"><span class="muted">${DONE_WORD[type]} ${qtyTxt(l.done)}</span><br><b class="pend">Pending ${qtyTxt(l.pending)}</b></small>`
+        : `<small class="prog"><b class="ok-ink">✓ All ${DONE_WORD[type].toLowerCase()}</b></small>`);
+    });
+  };
+  if (doc.id) linksPanel(api, "doc", doc.id, showProgress).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
 
   const tbody = $("#lines");
   const renumber = () => { $$("tr", tbody).forEach((r, i) => ($(".ln", r).textContent = i + 1)); recalc(); };
