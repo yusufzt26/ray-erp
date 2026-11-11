@@ -11,8 +11,11 @@
     "@netlify/blobs": "^11.1.9",
     "@netlify/database": "^2.0.3",
     "@netlify/functions": "^6.1.1",
+    "@tesseract.js-data/eng": "1.0.0",
     "bcryptjs": "^3.0.3",
     "pdfjs-dist": "5.4.296",
+    "tesseract.js": "5.1.1",
+    "tesseract.js-core": "5.1.1",
     "xlsx": "0.18.5"
   },
   "devDependencies": {

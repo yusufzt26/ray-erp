@@ -318,7 +318,7 @@ route("POST", "/api/d/:type/save", async (c) => {
   const b = c.body;
   const did = num(b.id);
   const pdfFile = str(b.pdf_file);
-  if (pdfFile && !/^[0-9a-f-]{36}\.pdf$/.test(pdfFile)) fail(400, "Bad file reference");
+  if (pdfFile && !FILE_KEY.test(pdfFile)) fail(400, "Bad file reference");
   const messages: string[] = [];
   const result = await tx(async (query) => {
     let partyId = num(b.party_id);
@@ -404,14 +404,26 @@ route("DELETE", "/api/d/:type/:id", async (c) => {
   return json({ message: "Deleted." });
 });
 
-// PDF files: raw body upload, stored in Netlify Blobs
+// Uploaded source files (PDF, photo, Excel): raw body upload, stored in Netlify Blobs
+const FILE_TYPES: Record<string, string> = {
+  pdf: "application/pdf", jpg: "image/jpeg", png: "image/png",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", xls: "application/vnd.ms-excel", csv: "text/csv",
+};
+const FILE_KEY = /^[0-9a-f-]{36}\.(pdf|jpg|png|xlsx|xls|csv)$/;
 route("POST", "/api/pdf/:type", async (c) => {
   docTypeOf(c.params.type);
   require(c, c.params.type, "edit");
   const buf = await c.req.arrayBuffer();
   if (!buf.byteLength) fail(400, "Empty file");
-  if (new TextDecoder().decode(buf.slice(0, 5)) !== "%PDF-") fail(400, "This is not a PDF file.");
-  const key = `${randomUUID()}.pdf`;
+  const ext = str(new URL(c.req.url).searchParams.get("ext")).toLowerCase() || "pdf";
+  if (!FILE_TYPES[ext]) fail(400, "This file type is not supported.");
+  const head = new Uint8Array(buf.slice(0, 8));
+  const magic = new TextDecoder().decode(head.slice(0, 5));
+  const okMagic = ext === "pdf" ? magic === "%PDF-" : ext === "jpg" ? head[0] === 0xff && head[1] === 0xd8
+    : ext === "png" ? head[0] === 0x89 && magic.slice(1, 4) === "PNG" : ext === "xlsx" ? head[0] === 0x50 && head[1] === 0x4b
+    : ext === "xls" ? head[0] === 0xd0 && head[1] === 0xcf : true;
+  if (!okMagic) fail(400, `This is not a ${ext.toUpperCase()} file.`);
+  const key = `${randomUUID()}.${ext}`;
   await pdfStore().set(key, buf, { metadata: { type: c.params.type, by: c.user!.id } });
   return json({ key }, 201);
 });
@@ -419,10 +431,12 @@ route("POST", "/api/pdf/:type", async (c) => {
 route("GET", "/api/pdf/:type/:key", async (c) => {
   docTypeOf(c.params.type);
   require(c, c.params.type);
-  if (!/^[0-9a-f-]{36}\.pdf$/.test(c.params.key)) fail(404, "Not found");
+  if (!FILE_KEY.test(c.params.key)) fail(404, "Not found");
   const data = await pdfStore().get(c.params.key, { type: "arrayBuffer" });
   if (!data) fail(404, "Not found");
-  return new Response(data, { headers: { "content-type": "application/pdf", "cache-control": "private, max-age=3600" } });
+  const ext = c.params.key.split(".").pop()!;
+  return new Response(data, { headers: { "content-type": FILE_TYPES[ext], "cache-control": "private, max-age=3600",
+    ...(["xlsx", "xls", "csv"].includes(ext) ? { "content-disposition": `attachment; filename="source.${ext}"` } : {}) } });
 });
 
 // ---------------------------------------------------------------- admin

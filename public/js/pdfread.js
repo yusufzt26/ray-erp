@@ -182,6 +182,46 @@ function linesFromText(lines) {
   return out;
 }
 
+const UOMS = /^(nos?|pcs?|pc|mtrs?|mtr|m|kgs?|kg|sets?|ea|each|units?|rolls?|ltrs?|l|box|pair|prs?)\.?$/i;
+const NUM_TOKEN = /^\d[\d,]*(?:\.\d+)?$/;
+
+/** Fallback for text read from a picture: a row ending in "HSN qty UOM rate amount", where some
+ *  of those may be missing or misread. Rate is worked out from amount / qty when they disagree. */
+function linesFromLoose(lines) {
+  const out = [];
+  for (const line of lines) {
+    const tok = line.trim().split(/\s+/);
+    if (tok.length < 3) continue;
+    const uomAt = tok.findIndex((t, i) => i > 0 && UOMS.test(t) && NUM_TOKEN.test(tok[i - 1]));
+    let i = uomAt >= 0 ? uomAt - 1 : -1;
+    let hsn = "";
+    if (i < 0) { // no unit: need HSN followed by qty
+      const hAt = tok.findIndex((t, k) => k > 0 && /^\d{4,8}$/.test(t) && NUM_TOKEN.test(tok[k + 1] || ""));
+      if (hAt < 0) continue;
+      hsn = tok[hAt]; i = hAt + 1;
+    } else if (/^\d{4,8}$/.test(tok[i - 1] || "")) hsn = tok[i - 1];
+    const qty = toNum(tok[i]);
+    const after = tok.slice(uomAt >= 0 ? uomAt + 1 : i + 1).filter((t) => NUM_TOKEN.test(t)).map(toNum);
+    let descTok = tok.slice(0, hsn ? i - 1 : i);
+    if (descTok.length && (/^\d{1,3}[.)]?$/.test(descTok[0]) || /^[A-Za-z|]$/.test(descTok[0]) || /^[A-Z]{1,2}$/.test(descTok[0]) && descTok.length > 2)) descTok = descTok.slice(1);
+    const desc = descTok.join(" ").trim();
+    if (!qty || !/[A-Za-z]{2}/.test(desc) || after.length === 0) continue;
+    let rate = after.length >= 2 ? after[after.length - 2] : after[0];
+    let amount = after.length >= 2 ? after[after.length - 1] : null;
+    if (amount !== null && rate && Math.abs(qty * rate - amount) > Math.max(1, amount * 0.02)) rate = Math.round((amount / qty) * 10000) / 10000;
+    if (amount === null && rate) {
+      // one number: rate if it is small next to qty x itself, otherwise it is the amount
+      if (rate > 50 * qty && qty > 1) { amount = rate; rate = Math.round((amount / qty) * 10000) / 10000; } else amount = Math.round(qty * rate * 100) / 100;
+    }
+    let part = "";
+    const first = desc.split(" ")[0];
+    if (/[A-Za-z]/.test(first) && /\d/.test(first) && /^[A-Z0-9][A-Z0-9/._-]{3,}$/i.test(first) && desc.includes(" ")) part = first;
+    out.push({ party_part_no: part, description: part ? desc.slice(part.length).trim() : desc, hsn, qty,
+      uom: uomAt >= 0 ? tok[uomAt].replace(/\.$/, "").toUpperCase() : "", rate, amount });
+  }
+  return out;
+}
+
 const SKIP_TITLE = /^(tax\s*invoice|invoice|purchase\s*order|p\.?o\.?|original|duplicate|triplicate|copy|for recipient|for transporter|page|e-?invoice|bill of supply|sales order|gstin|irn|ack)\b/i;
 
 function guessIssuer(firstPageLines) {
@@ -221,19 +261,8 @@ function itemsToRows(items) {
   });
 }
 
-export async function readPdf(arrayBuffer, docType, ownGstin = "", pdfjsLib = null) {
-  const pdfjs = pdfjsLib || (await import("/vendor/pdf.min.mjs"));
-  if (!pdfjsLib) pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.mjs";
-  const pdf = await pdfjs.getDocument({ data: new Uint8Array(arrayBuffer.slice(0)) }).promise;
-  const allRows = [];
-  let firstPage = [];
-  for (let n = 1; n <= Math.min(pdf.numPages, 20); n++) {
-    const page = await pdf.getPage(n);
-    const content = await page.getTextContent();
-    const rows = itemsToRows(content.items);
-    if (n === 1) firstPage = rows.map((r) => r.text);
-    allRows.push(...rows);
-  }
+/** Header fields and item lines from rows of cells (from a PDF, a spreadsheet or OCR). */
+function analyse(allRows, firstPage, docType, ownGstin, ocr = false) {
   const lines = allRows.map((r) => r.text.replace(/\s{2,}/g, "  "));
   const flat = lines.map((l) => l.replace(/\s+/g, " "));
   const text = lines.join("\n");
@@ -244,6 +273,7 @@ export async function readPdf(arrayBuffer, docType, ownGstin = "", pdfjsLib = nu
 
   let items = linesFromLayout(allRows);
   if (!items.length) items = linesFromText(flat);
+  if (ocr) { const loose = linesFromLoose(flat); if (loose.length > items.length) items = loose; }
   const hasDelivery = /delivery\s*date|due\s*date|required\s*by|schedule\s*date/i.test(text);
 
   return {
@@ -261,4 +291,190 @@ export async function readPdf(arrayBuffer, docType, ownGstin = "", pdfjsLib = nu
   };
 }
 
-export const _test = { parseDate, linesFromText, mapHeader, itemsToRows, linesFromLayout };
+async function loadPdfjs(pdfjsLib) {
+  const pdfjs = pdfjsLib || (await import("/vendor/pdf.min.mjs"));
+  if (!pdfjsLib) pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.mjs";
+  return pdfjs;
+}
+
+export async function readPdf(arrayBuffer, docType, ownGstin = "", pdfjsLib = null) {
+  const pdfjs = await loadPdfjs(pdfjsLib);
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(arrayBuffer.slice(0)) }).promise;
+  const allRows = [];
+  let firstPage = [];
+  for (let n = 1; n <= Math.min(pdf.numPages, 20); n++) {
+    const page = await pdf.getPage(n);
+    const content = await page.getTextContent();
+    const rows = itemsToRows(content.items);
+    if (n === 1) firstPage = rows.map((r) => r.text);
+    allRows.push(...rows);
+  }
+  return analyse(allRows, firstPage, docType, ownGstin);
+}
+
+/** A spreadsheet (SheetJS workbook): every non-empty row becomes a row of cells placed by column. */
+export function readSheet(XLSX, wb, docType, ownGstin = "") {
+  const allRows = [];
+  for (const name of wb.SheetNames.slice(0, 5)) {
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", raw: false, blankrows: false });
+    for (const r of aoa) {
+      const cells = [];
+      r.forEach((v, i) => { const t = String(v ?? "").replace(/\s+/g, " ").trim(); if (t) cells.push({ x: i * 100, x2: i * 100 + 90, text: t }); });
+      if (cells.length) allRows.push({ cells, text: cells.map((c) => c.text).join("  ") });
+    }
+  }
+  return analyse(allRows, allRows.slice(0, 10).map((r) => r.text), docType, ownGstin);
+}
+
+// ---------------------------------------------------------------- OCR (photos and scanned PDFs)
+let tessWorker = null, ocrProgress = null;
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const el = document.createElement("script");
+    el.src = src; el.onload = res; el.onerror = () => rej(new Error("the text-recognition library did not load"));
+    document.head.appendChild(el);
+  });
+}
+async function ocrWorker() {
+  if (!tessWorker) tessWorker = (async () => {
+    if (!window.Tesseract) await loadScript("/vendor/tess/tesseract.min.js");
+    return window.Tesseract.createWorker("eng", 1, {
+      workerPath: "/vendor/tess/worker.min.js", corePath: "/vendor/tess", langPath: "/vendor/tess",
+      logger: (m) => ocrProgress?.(m),
+    });
+  })();
+  try { return await tessWorker; } catch (e) { tessWorker = null; throw e; }
+}
+
+const OCR_JUNK = /^[|\[\]{}()_=~—–\-.,:;'"!`]+$/;
+
+const cleanWord = (x) => {
+  const t = x.text.replace(/^[|\[\]]+|[|\[\]]+$/g, "").trim();
+  if (!t || OCR_JUNK.test(t) || x.confidence < 10) return null;
+  return t
+    .replace(/^(\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z])2([0-9A-Z])$/, "$1Z$2") // GSTIN: the 14th letter is always Z
+    .replace(/^(\d{1,3})\.(\d{3}(?:\.\d{3})*)\.(\d{2})$/, (m, a, b, c) => `${a},${b.replace(/\./g, ",")}.${c}`); // 35.400.00 -> 35,400.00
+};
+
+/** Two readings of one image, laid out like PDF text:
+ *  - "block": Tesseract reads the page as one block, so each printed row stays one line (good for straight scans);
+ *  - "auto": Tesseract finds the layout itself and we rebuild the rows from word positions, corrected for tilt (good for photos). */
+async function ocrRowSets(image) {
+  const w = await ocrWorker();
+  const sets = [];
+  await w.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
+  let { data } = await w.recognize(image, { rotateAuto: true });
+  const block = [];
+  (data.lines || []).forEach((line, li) => {
+    for (const x of line.words || []) {
+      const t = cleanWord(x);
+      if (t) block.push({ str: t, width: x.bbox.x1 - x.bbox.x0, transform: [1, 0, 0, x.bbox.y1 - x.bbox.y0, x.bbox.x0, -li * 100000] });
+    }
+  });
+  sets.push(itemsToRows(block));
+
+  await w.setParameters({ tessedit_pageseg_mode: "3" });
+  ({ data } = await w.recognize(image, { rotateAuto: true }));
+  const slopes = (data.lines || []).map((l) => l.baseline).filter((bl) => bl && bl.x1 - bl.x0 > 80)
+    .map((bl) => (bl.y1 - bl.y0) / (bl.x1 - bl.x0)).sort((a, b) => a - b);
+  const slope = slopes.length ? slopes[slopes.length >> 1] : 0;
+  const auto = [];
+  for (const x of data.words || []) {
+    const t = cleanWord(x);
+    if (!t) continue;
+    const xc = (x.bbox.x0 + x.bbox.x1) / 2, yc = (x.bbox.y0 + x.bbox.y1) / 2 - slope * xc;
+    auto.push({ str: t, width: x.bbox.x1 - x.bbox.x0, transform: [1, 0, 0, x.bbox.y1 - x.bbox.y0, x.bbox.x0, -yc] });
+  }
+  sets.push(itemsToRows(auto));
+  return sets;
+}
+
+/** The reading that found more: item lines count most, then the header fields. */
+function bestReading(results) {
+  const score = (r) => r.lines.length * 4 + !!r.doc_no + !!r.doc_date + !!r.total_amount + !!r.party_gstin
+    + r.lines.filter((l) => l.amount && l.rate && Math.abs(l.qty * l.rate - l.amount) < 1).length;
+  return results.reduce((a, b) => (score(b) > score(a) ? b : a));
+}
+
+/** Common misreads in order numbers ("PQ" for "PO", a letter O among digits). */
+function fixOcr(r) {
+  const doc_no = (r.doc_no || "").replace(/\bPQ\b/g, "PO").replace(/(?<=\d)[Oo](?=\d)/g, "0");
+  const lines = r.lines.map((l) => ({ ...l, description: l.description.replace(/^[A-Za-z|]\s+(?=\S{3})/, "") }));
+  return { ...r, doc_no, lines, ocr: true };
+}
+
+/** Draw an image file on a canvas, scaled so the longer side is about 2400 px (good for OCR, small to store). */
+export async function imageToCanvas(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const scale = Math.min(2, 2400 / Math.max(bmp.width, bmp.height));
+  const cv = document.createElement("canvas");
+  cv.width = Math.round(bmp.width * scale); cv.height = Math.round(bmp.height * scale);
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(bmp, 0, 0, cv.width, cv.height);
+  return cv;
+}
+
+/** Black-and-white copy with a local (adaptive) threshold: evens out shadows and uneven light in phone photos. */
+function binarize(src) {
+  const W = src.width, H = src.height;
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext("2d");
+  ctx.drawImage(src, 0, 0);
+  const img = ctx.getImageData(0, 0, W, H), d = img.data;
+  const g = new Float64Array(W * H);
+  for (let i = 0; i < W * H; i++) g[i] = d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114;
+  const I = new Float64Array((W + 1) * (H + 1)); // integral image
+  for (let y = 0; y < H; y++) {
+    let row = 0;
+    for (let x = 0; x < W; x++) { row += g[y * W + x]; I[(y + 1) * (W + 1) + x + 1] = I[y * (W + 1) + x + 1] + row; }
+  }
+  const r = Math.max(8, Math.round(Math.max(W, H) / 60));
+  for (let y = 0; y < H; y++) {
+    const y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1);
+    for (let x = 0; x < W; x++) {
+      const x0 = Math.max(0, x - r), x1 = Math.min(W, x + r + 1);
+      const sum = I[y1 * (W + 1) + x1] - I[y0 * (W + 1) + x1] - I[y1 * (W + 1) + x0] + I[y0 * (W + 1) + x0];
+      const mean = sum / ((x1 - x0) * (y1 - y0));
+      const v = g[y * W + x] < mean * 0.85 ? 0 : 255;
+      const k = (y * W + x) * 4;
+      d[k] = d[k + 1] = d[k + 2] = v; d[k + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return cv;
+}
+
+export async function readImage(canvas, docType, ownGstin = "", onProgress = null) {
+  ocrProgress = onProgress;
+  let sets = await ocrRowSets(canvas);
+  const first = bestReading(sets.map((rows) => analyse(rows, [], docType, ownGstin, true)));
+  if (first.lines.length < 2 || !first.doc_no) sets = sets.concat(await ocrRowSets(binarize(canvas))); // try again on a cleaned-up copy
+  return fixOcr(bestReading(sets.map((rows) => analyse(rows, rows.slice(0, 10).map((x) => x.text), docType, ownGstin, true))));
+}
+
+/** A PDF with no text inside (a scan): render each page and OCR it. */
+export async function readScannedPdf(arrayBuffer, docType, ownGstin = "", onProgress = null) {
+  const pdfjs = await loadPdfjs(null);
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(arrayBuffer.slice(0)) }).promise;
+  const allRows = [];
+  let firstPage = [];
+  for (let n = 1; n <= Math.min(pdf.numPages, 5); n++) {
+    const page = await pdf.getPage(n);
+    const vp0 = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: Math.min(4, 2400 / Math.max(vp0.width, vp0.height)) });
+    const cv = document.createElement("canvas");
+    cv.width = viewport.width; cv.height = viewport.height;
+    await page.render({ canvasContext: cv.getContext("2d"), viewport }).promise;
+    ocrProgress = (m) => onProgress?.({ ...m, page: n, pages: Math.min(pdf.numPages, 5) });
+    const sets = await ocrRowSets(cv);
+    const pick = sets.indexOf(sets.reduce((a, b) => (b.length && analyse(b, [], docType, ownGstin, true).lines.length > analyse(a, [], docType, ownGstin, true).lines.length ? b : a)));
+    const rows = sets[pick];
+    if (n === 1) firstPage = rows.slice(0, 10).map((r) => r.text);
+    allRows.push(...rows);
+  }
+  return fixOcr(analyse(allRows, firstPage, docType, ownGstin, true));
+}
+
+export const _test = { parseDate, linesFromText, linesFromLoose, mapHeader, itemsToRows, linesFromLayout };

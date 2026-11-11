@@ -53,3 +53,26 @@ build(os.path.join(HERE, "sample_vendor_invoice.pdf"),
        ["", "SGST 9%", "", "", "", "", "7,119.00"],
        ["", "Total Invoice Value", "", "", "", "", "93,338.00"]])
 print("ok")
+
+# The same customer PO as an Excel sheet, a scanned image and a scanned (image-only) PDF.
+import subprocess
+from openpyxl import Workbook
+from PIL import Image
+
+wb = Workbook(); ws = wb.active; ws.title = "PO"
+for r in [["Sunrise Auto Components Pvt Ltd"], ["Plot 22, MIDC Chakan, Pune, Maharashtra 410501"], ["GSTIN:", "27AAACS1234F1Z9"], [],
+          ["PURCHASE ORDER"], ["PO No:", "SAC/PO/2526/0458"], ["PO Date:", "06/11/2026"], ["Delivery Date:", "26/11/2026"], [],
+          ["Sr", "Part No", "Description", "HSN", "Qty", "UOM", "Rate", "Amount"],
+          [1, "SAC-FL-0812", "Nylon Fuel Line Assy 8x10 L=450", "87089900", 400, "NOS", 142.5, 57000],
+          [2, "SAC-CL-0101", "Nylon Clip Double 8mm", "39269099", 1000, "NOS", 3.25, 3250], [],
+          ["", "", "Sub Total", "", "", "", "", 60250], ["", "", "IGST 18%", "", "", "", "", 10845], ["", "", "Grand Total", "", "", "", "", 71095]]:
+    ws.append(r)
+wb.save(os.path.join(HERE, "sample_customer_po.xlsx"))
+
+png = os.path.join(HERE, "sample_customer_po_scan")
+subprocess.run(["pdftoppm", "-r", "200", "-gray", "-singlefile", "-png", os.path.join(HERE, "sample_customer_po.pdf"), png], check=True)
+img = Image.open(png + ".png").convert("L").rotate(0.8, fillcolor=255, expand=True)
+img.save(png + ".jpg", quality=80)
+img.save(os.path.join(HERE, "sample_customer_po_scan.pdf"), resolution=200)
+os.remove(png + ".png")
+print("excel + scan samples written")

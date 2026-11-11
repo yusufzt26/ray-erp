@@ -57,7 +57,25 @@ await p.waitForSelector("text=CPO-00001 saved", { timeout: 15000 });
 const body = await p.textContent("main");
 ok(body.includes("New customer CUS-0001") && body.includes("FG-00002"), "saved with new customer and products");
 
+// the same PO as Excel and as a scanned photo: read into the form (not saved)
+const cpoUrl = p.url();
+for (const [f, label] of [["sample_customer_po.xlsx", "Read from Excel"], ["sample_customer_po_scan.jpg", "by text recognition"]]) {
+  await p.goto(U + "/#/"); await p.waitForSelector(".kpis");
+  await p.goto(U + "/#/d/customer_po/upload"); await p.waitForSelector("#drop");
+  await p.setInputFiles("#file", sample(f));
+  await p.waitForSelector(`.detect:has-text("${label}")`, { timeout: 90000 });
+  const xl = f.endsWith(".xlsx");
+  ok(await p.inputValue("[name=doc_no]") === (xl ? "SAC/PO/2526/0458" : "SAC/PO/2526/0457"), `${f}: PO number read`);
+  ok(await p.inputValue("[name=doc_date]") === (xl ? "2026-11-06" : "2026-11-05"), `${f}: PO date read`);
+  ok(await p.inputValue("[name=party_id]") !== "", `${f}: customer matched by GSTIN`);
+  const rows = await p.$$eval("#lines tr", (rs) => rs.map((r) => ["qty", "rate", "amount"].map((n) => Number(r.querySelector(`[name=${n}]`).value))));
+  ok(JSON.stringify(rows) === (xl ? "[[400,142.5,57000],[1000,3.25,3250]]" : "[[500,142.5,71250],[300,118,35400],[2000,3.25,6500]]"), `${f}: item lines read ${JSON.stringify(rows)}`);
+  ok(await p.inputValue("#lines tr:first-child [name=product_id]") === "1", `${f}: line 1 matched to our item`);
+  await p.screenshot({ path: join(SHOTS, `po_review_${xl ? "excel" : "photo"}.png`), fullPage: true });
+}
+
 // invoice from PO
+await p.goto(cpoUrl); await p.waitForSelector("text=Make Invoice");
 await p.click("text=Make Invoice");
 await p.waitForSelector("text=Step 1.");
 ok(await p.inputValue("[name=po_no]") === "SAC/PO/2526/0457", "invoice prefilled from PO");

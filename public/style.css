@@ -298,3 +298,9 @@ table.bank .det .bills { display: flex; flex-direction: column; gap: 2px; margin
 table.bank .det input.qty { width: 100px; margin-left: 4px; }
 .pill.npd { background: #ede4fb; color: #5b2ea6; font-weight: 600; }
 .seg { display: flex; gap: 1.2rem; flex-wrap: wrap; margin: .8rem 0 .4rem; padding: .6rem .8rem; background: var(--panel); border-radius: 8px; }
+.sheetpane .sheetprev { overflow: auto; max-height: 75vh; background: var(--card, #fff); border: 1px solid var(--line, #dde3ea); border-radius: 8px; font-size: .78rem; }
+.sheetpane .sheetprev table { border-collapse: collapse; }
+.sheetpane .sheetprev td { border: 1px solid var(--line, #dde3ea); padding: 2px 6px; white-space: nowrap; }
+#drop progress { width: 100%; margin-top: .5rem; }
+.pdfpane .imgprev { height: 62vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.pdfpane .imgprev img { width: 100%; display: block; }

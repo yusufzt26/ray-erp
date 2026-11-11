@@ -1,5 +1,5 @@
 import { CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES } from "./fields.js";
-import { readPdf } from "./pdfread.js";
+import { imageToCanvas, readImage, readPdf, readScannedPdf, readSheet } from "./pdfread.js";
 import { invoicePages } from "./invoice.js";
 import { morePages } from "./more.js";
 import { linksPanel, payStatus } from "./links.js";
@@ -134,8 +134,8 @@ pages.dashboard = async () => {
     can("sales_invoice", "edit") && ["#/invoices/new", "🧾 New Sales Invoice", "From a customer PO"],
     can("stock", "edit") && ["#/stock/entry", "📊 Stock Entry", "Opening, production, issue"],
     can("accounts", "edit") && ["#/payments/new?dir=in", "💰 Payment Received", "From a customer"],
-    can("customer_po", "edit") && ["#/d/customer_po/upload", "⬆ Upload Customer PO", "PDF → auto-fill"],
-    can("vendor_invoice", "edit") && ["#/d/vendor_invoice/upload", "⬆ Upload Vendor Invoice", "PDF → auto-fill"],
+    can("customer_po", "edit") && ["#/d/customer_po/upload", "⬆ Upload Customer PO", "PDF, Excel or photo → auto-fill"],
+    can("vendor_invoice", "edit") && ["#/d/vendor_invoice/upload", "⬆ Upload Vendor Invoice", "PDF, Excel or photo → auto-fill"],
     can("products", "edit") && ["#/m/products/new", "＋ New Product", "Item code is automatic"],
   ].filter(Boolean);
   const views = Object.entries(DASHBOARDS).filter(([k, v]) => (k === "admin" ? S.user.role === "Admin" : can(v.perm))).map(([k]) => k);
@@ -370,7 +370,7 @@ pages.docList = async (type) => {
   layout(`
     <div class="head"><h1>${d.title} <small>(${rows.length})</small></h1>
       <div class="actions">
-        ${can(type, "edit") ? (d.pdf ? `<a class="btn primary" href="#/d/${type}/upload">⬆ Upload PDF</a><a class="btn" href="#/d/${type}/new">＋ Enter manually</a>`
+        ${can(type, "edit") ? (d.pdf ? `<a class="btn primary" href="#/d/${type}/upload">⬆ Upload PDF / Excel / photo</a><a class="btn" href="#/d/${type}/new">＋ Enter manually</a>`
           : `<a class="btn primary" href="#/d/${type}/new">＋ New ${h(d.singular)}</a>`) : ""}
         <button class="btn" id="exx">⬇ Excel</button><button class="btn" id="exc">⬇ CSV</button>
       </div></div>
@@ -399,29 +399,62 @@ pages.docUpload = (type) => {
   layout(`
     <div class="head"><h1>Upload ${d.singular}</h1><a class="btn" href="#/d/${type}">← Back to list</a></div>
     <div class="card">
-      <p>Choose the PDF ${type === "customer_po" ? "purchase order you received from the customer" : "invoice you received from the vendor"}.
+      <p>Choose the ${type === "customer_po" ? "purchase order you received from the customer" : "invoice you received from the vendor"}: a <b>PDF</b>, an <b>Excel</b> sheet or a <b>photo / scan</b>.
       The app reads it and fills in the ${h(d.noLabel)}, date, ${d.partyLabel.toLowerCase()}, GSTIN, items and totals.
-      You will see the PDF next to the form, so you can check and correct everything before saving.</p>
+      You will see the file next to the form, so you can check and correct everything before saving.</p>
       <div id="err"></div>
-      <label class="drop" id="drop"><input type="file" accept="application/pdf,.pdf" id="file">
-        <b>Click to choose a PDF</b> or drag it here<br><span id="fname" class="muted"></span></label>
-      <p class="muted">Works best with PDFs generated from a computer (ERP / Tally / SAP / OEM portals). Scanned photos have no text, so you'll type those in.</p>
+      <label class="drop" id="drop"><input type="file" accept="application/pdf,.pdf,.xlsx,.xls,.xlsm,.csv,image/*" id="file">
+        <b>Click to choose a PDF, Excel or photo</b> or drag it here<br><span id="fname" class="muted"></span>
+        <progress id="prog" max="1" value="0" hidden></progress></label>
+      <p class="muted">PDFs made on a computer and Excel files are read exactly. Photos and scanned PDFs are read by text recognition:
+        a flat, well-lit, straight photo works best, and the numbers must be checked before saving.</p>
     </div>`);
   const drop = $("#drop"), inp = $("#file");
   ["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("hover"); }));
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("hover"); }));
   drop.addEventListener("drop", (e) => { if (e.dataTransfer.files[0]) handle(e.dataTransfer.files[0]); });
   inp.onchange = () => inp.files[0] && handle(inp.files[0]);
+  const say = (t) => ($("#fname").textContent = t);
+  const progress = (m) => {
+    const bar = $("#prog");
+    if (!bar) return;
+    if (m.status === "recognizing text") {
+      bar.hidden = false; bar.value = m.progress || 0;
+      say(`Reading the text${m.pages > 1 ? ` (page ${m.page} of ${m.pages})` : ""}… ${Math.round((m.progress || 0) * 100)}%`);
+    } else if (/loading|initializ/.test(m.status)) say("Getting text recognition ready (first time takes a few seconds)…");
+  };
   async function handle(file) {
-    if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") { $("#err").innerHTML = errorBox(["Please choose a PDF file."]); return; }
-    if (file.size > 4.5 * 1024 * 1024) { $("#err").innerHTML = errorBox(["This PDF is larger than 4.5 MB. Please compress it or enter it manually."]); return; }
-    $("#fname").textContent = `Reading ${file.name}…`;
+    const name = file.name.toLowerCase();
+    const kind = /\.pdf$/.test(name) || file.type === "application/pdf" ? "pdf"
+      : /\.(xlsx|xlsm|xls|csv)$/.test(name) ? "sheet"
+      : /^image\//.test(file.type) || /\.(jpe?g|png|webp|heic|heif|bmp|gif)$/.test(name) ? "image" : null;
+    if (!kind) { $("#err").innerHTML = errorBox(["Please choose a PDF, an Excel file or a photo."]); return; }
+    if (kind !== "image" && file.size > 4.5 * 1024 * 1024) { $("#err").innerHTML = errorBox(["This file is larger than 4.5 MB. Please compress it or enter it manually."]); return; }
+    $("#err").innerHTML = "";
+    say(`Reading ${file.name}…`);
     try {
-      const buf = await file.arrayBuffer();
-      const ex = await readPdf(buf, type, S.settings.company_gstin || "");
-      $("#fname").textContent = "Uploading and matching…";
+      const gst = S.settings.company_gstin || "";
+      let ex, blob = file, ext = "pdf", preview = null;
+      if (kind === "pdf") {
+        const buf = await file.arrayBuffer();
+        ex = await readPdf(buf, type, gst);
+        if (ex.scanned) { say("This PDF is a scan. Reading it with text recognition…"); ex = await readScannedPdf(buf, type, gst, progress); }
+      } else if (kind === "sheet") {
+        ext = name.endsWith(".csv") ? "csv" : name.endsWith(".xls") ? "xls" : "xlsx";
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array", raw: ext === "csv", cellDates: false });
+        ex = readSheet(XLSX, wb, type, gst);
+        preview = XLSX.utils.sheet_to_html(wb.Sheets[wb.SheetNames[0]], { header: "", footer: "" });
+      } else {
+        let cv;
+        try { cv = await imageToCanvas(file); }
+        catch { throw new Error("this browser cannot open that photo format; please send it as JPG or PNG"); }
+        blob = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.85)); ext = "jpg";
+        ex = await readImage(cv, type, gst, progress);
+      }
+      $("#prog").hidden = true;
+      say("Uploading and matching…");
       const [{ key }, match] = await Promise.all([
-        api("POST", `/api/pdf/${type}`, new Blob([buf], { type: "application/pdf" }), true),
+        api("POST", `/api/pdf/${type}?ext=${ext}`, new Blob([await blob.arrayBuffer()], { type: blob.type || "application/octet-stream" }), true),
         api("POST", `/api/d/${type}/match`, { text: ex.text, party_gstin: ex.party_gstin, party_name: ex.party_name, lines: ex.lines }),
       ]);
       const doc = {
@@ -431,14 +464,15 @@ pages.docUpload = (type) => {
         pdf_file: key, status: d.statuses[0], notes: "",
       };
       const lines = ex.lines.map((l, i) => ({ ...l, product_id: match.productIds[i], create_product: !match.productIds[i] }));
-      const found = { name: file.name, doc_no: !!ex.doc_no, doc_date: !!ex.doc_date, party: !!match.party, how: match.how,
-        lines: lines.length, total: !!ex.total_amount, gstins: ex.all_gstins, scanned: ex.scanned, text: ex.text,
-        pdfUrl: URL.createObjectURL(file) };
+      const found = { name: file.name, kind, ocr: !!ex.ocr, doc_no: !!ex.doc_no, doc_date: !!ex.doc_date, party: !!match.party, how: match.how,
+        lines: lines.length, total: !!ex.total_amount, gstins: ex.all_gstins, scanned: ex.scanned, text: ex.text, preview,
+        pdfUrl: kind === "sheet" ? null : URL.createObjectURL(blob) };
       await pages.docForm(type, null, { doc, lines, found });
     } catch (err) {
       console.error(err);
-      $("#fname").textContent = "";
-      $("#err").innerHTML = errorBox([`Could not read this PDF (${err.message}). You can still enter the details by hand.`]);
+      say("");
+      if ($("#prog")) $("#prog").hidden = true;
+      $("#err").innerHTML = errorBox([`Could not read this file (${err.message}). You can still enter the details by hand.`]);
     }
   }
 };
@@ -474,7 +508,11 @@ pages.docForm = async (type, id, preset = null) => {
   const editable = can(type, "edit");
   const flag = d.productFlag;
   const cls = (hit) => (found ? (hit ? "auto" : "missing") : "");
-  const pdfUrl = found?.pdfUrl || (doc.pdf_file ? `/api/pdf/${type}/${doc.pdf_file}` : null);
+  const srcExt = doc.pdf_file ? doc.pdf_file.split(".").pop() : "";
+  const isSheet = found ? found.kind === "sheet" : ["xlsx", "xls", "csv"].includes(srcExt);
+  const srcUrl = doc.pdf_file ? `/api/pdf/${type}/${doc.pdf_file}` : null;
+  const pdfUrl = isSheet ? null : found?.pdfUrl || srcUrl;
+  const showPane = pdfUrl || (isSheet && (found?.preview || srcUrl));
   if (found) lines.forEach((l) => (l.found = true));
 
   layout(`
@@ -485,15 +523,16 @@ pages.docForm = async (type, id, preset = null) => {
       <a class="btn" href="#/d/${type}">← Back to list</a></div></div>
     ${preset?.source ? `<div class="flash ok">Made from ${h(DOC_TYPES[preset.source.type].singular)} ${h(preset.source.ref_no)}: only the quantity still pending is filled in. Check and save.</div>` : ""}
     <div id="err"></div>
-    ${found ? `<div class="detect"><b>Read from PDF "${h(found.name)}":</b>
-      ${found.scanned ? '<span class="miss">This PDF looks scanned (no text inside). Please type the details while looking at the PDF.</span>' : `
+    ${found ? `<div class="detect"><b>Read from ${found.kind === "sheet" ? "Excel" : found.kind === "image" ? "photo" : "PDF"} "${h(found.name)}"${found.ocr ? " by text recognition" : ""}:</b>
+      ${found.scanned ? `<span class="miss">No readable text was found in this ${found.kind === "image" ? "photo" : "file"}. Please type the details while looking at it.</span>` : `
       <span class="${found.doc_no ? "hit" : "miss"}">${h(d.noLabel)}</span>
       <span class="${found.doc_date ? "hit" : "miss"}">Date</span>
       <span class="${found.party ? "hit" : "miss"}">${d.partyLabel}${found.party ? ` (by ${found.how})` : " not in master"}</span>
       <span class="${found.lines ? "hit" : "miss"}">${found.lines} item line${found.lines === 1 ? "" : "s"}</span>
       <span class="${found.total ? "hit" : "miss"}">Total</span>
-      <br><small class="muted">Green = filled automatically, please check. Red = not found, please fill. Yellow boxes were auto-filled.</small>`}</div>` : ""}
-    <form id="f" class="${pdfUrl ? "split" : ""}">
+      <br><small class="muted">Green = filled automatically, please check. Red = not found, please fill. Yellow boxes were auto-filled.</small>
+      ${found.ocr ? '<br><small class="pend">Read from an image: check every quantity, rate and number against the picture before saving.</small>' : ""}`}</div>` : ""}
+    <form id="f" class="${showPane ? "split" : ""}">
       <div class="card hdr"><fieldset ${editable ? "" : "disabled"}><div class="form-grid">
         <label>${d.partyLabel} <span class="req">*</span>
           <select name="party_id" id="party_id" class="${found && found.party ? "auto" : ""}"><option value="">— not in list / new —</option>
@@ -503,7 +542,7 @@ pages.docForm = async (type, id, preset = null) => {
           <input name="party_name" id="party_name" required value="${h(doc.party_name)}" class="${found && doc.party_name ? "auto" : ""}"></label>
         <label>${d.partyLabel} GSTIN
           <input name="party_gstin" id="party_gstin" maxlength="15" value="${h(doc.party_gstin)}" class="upper ${found && doc.party_gstin ? "auto" : ""}">
-          ${found && found.gstins.length > 1 ? `<small>GSTINs in PDF: ${found.gstins.map(h).join(", ")}</small>` : ""}</label>
+          ${found && found.gstins.length > 1 ? `<small>GSTINs in file: ${found.gstins.map(h).join(", ")}</small>` : ""}</label>
         <label class="check" id="create_party_box" ${doc.party_id ? "hidden" : ""}><input type="checkbox" name="create_party" ${found && !found.party ? "checked" : ""}> Add as new ${d.partyLabel.toLowerCase()} in master</label>
         <label>${h(d.noLabel)} ${d.own ? "" : '<span class="req">*</span>'}<input name="doc_no" ${d.own ? `placeholder="Given automatically"` : "required"} value="${h(doc.doc_no)}" class="${cls(found?.doc_no)}"></label>
         <label>${h(d.dateLabel)}<input name="doc_date" type="date" value="${h(doc.doc_date)}" class="${cls(found?.doc_date)}"></label>
@@ -511,9 +550,12 @@ pages.docForm = async (type, id, preset = null) => {
         <label>Status<select name="status">${d.statuses.map((s) => `<option ${doc.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
         <label>Type<select name="segment">${["Regular", "NPD"].map((s) => `<option value="${s}" ${(doc.segment || "Regular") === s ? "selected" : ""}>${s === "NPD" ? "NPD (new product development)" : "Regular production"}</option>`).join("")}</select></label>
       </div></fieldset></div>
-      ${pdfUrl ? `<div class="pdfpane"><iframe src="${pdfUrl}" title="PDF"></iframe>
-        <a href="${pdfUrl}" target="_blank" rel="noopener">Open PDF in new tab</a>
-        ${found?.text ? `<details><summary>Text found in PDF (copy from here)</summary><pre>${h(found.text)}</pre></details>` : ""}</div>` : ""}
+      ${pdfUrl ? `<div class="pdfpane">${srcExt === "jpg" || srcExt === "png" || found?.kind === "image"
+          ? `<div class="imgprev"><img src="${pdfUrl}" alt="Uploaded photo"></div>` : `<iframe src="${pdfUrl}" title="Uploaded file"></iframe>`}
+        <a href="${pdfUrl}" target="_blank" rel="noopener">Open ${srcExt === "jpg" || srcExt === "png" || found?.kind === "image" ? "photo" : "PDF"} in new tab</a>
+        ${found?.text ? `<details><summary>Text found in the file (copy from here)</summary><pre>${h(found.text)}</pre></details>` : ""}</div>`
+      : showPane ? `<div class="pdfpane sheetpane">${found?.preview ? `<div class="sheetprev">${found.preview}</div>` : "<p>Uploaded Excel file.</p>"}
+        ${srcUrl && !found ? `<a href="${srcUrl}">⬇ Download the original Excel file</a>` : ""}</div>` : ""}
       <div class="card items"><fieldset ${editable ? "" : "disabled"}>
         <h2>Items</h2>
         <div class="scroll"><table class="lines"><thead><tr><th>#</th><th>Our item</th><th>Part No</th><th>Description</th><th>HSN</th><th>Qty</th><th>UOM</th><th>Rate</th><th>Amount</th><th>New product?</th><th></th></tr></thead>
