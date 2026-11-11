@@ -231,6 +231,16 @@ ok(Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance) === r
   ok(b2.docType === "CHL" && b2.subSupplyType === 4 && b2.cgstValue + b2.sgstValue + b2.igstValue === 0, "challan e-way file for job work, no tax");
 }
 
+// deleting the latest invoice gives its number back
+{
+  const rows = (await getJ("/api/invoices")).rows;
+  const last = rows.find((r) => r.inv_no === "R/26-007");
+  const res = await p.evaluate(async (id) => (await fetch("/api/invoices/" + id, { method: "DELETE", headers: { "x-requested-with": "ray-erp" } })).json(), last.id);
+  ok(/next invoice will be R\/26-007/.test(res.message || ""), "deleting the last invoice gives its number back");
+  const c = (await getJ("/api/invoice-counter")).rows.find((r) => r.name === "invoice_26");
+  ok(Number(c.value) === 6, "invoice counter back to 6");
+}
+
 // users + roles
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "ravi.store"); await p.fill("[name=full_name]", "Ravi"); await p.selectOption("[name=role]", "Store");

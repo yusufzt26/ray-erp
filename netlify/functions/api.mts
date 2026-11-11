@@ -615,8 +615,27 @@ route("POST", "/api/invoices/save", async (c) => {
 
 route("DELETE", "/api/invoices/:id", async (c) => {
   if (c.user?.role !== "Admin") fail(403, "Only Admin can delete an invoice. Others can mark it Cancelled.");
-  await q("DELETE FROM invoices WHERE id = $1", [Number(c.params.id)]);
-  return json({ message: "Invoice deleted." });
+  const inv = await one("SELECT id, inv_no, customer_po_id, challan_id FROM invoices WHERE id = $1", [Number(c.params.id)]);
+  if (!inv) fail(404, "Not found");
+  let reuse = "";
+  await tx(async (query) => {
+    await query("DELETE FROM invoices WHERE id = $1", [inv.id]);
+    // Deleting the latest invoice gives its number back, so the series stays without gaps.
+    const m = String(inv.inv_no).match(/^(.*)\/(\d{2})-(\d+)$/);
+    if (m) {
+      const counter = `invoice_${m[2]}`;
+      const cur = (await query("SELECT value FROM counters WHERE name = $1 FOR UPDATE", [counter]))[0]?.value;
+      if (Number(cur) === Number(m[3])) {
+        const rows = await query("SELECT inv_no FROM invoices WHERE inv_no LIKE $1", [`%/${m[2]}-%`]);
+        const top = Math.max(0, ...rows.map((r: any) => Number(String(r.inv_no).match(/-(\d+)$/)?.[1] || 0)));
+        await query("UPDATE counters SET value = $1 WHERE name = $2", [top, counter]);
+        reuse = ` The next invoice will be ${m[1]}/${m[2]}-${String(top + 1).padStart(3, "0")}.`;
+      }
+    }
+    if (inv.customer_po_id) await refreshStatus(query, inv.customer_po_id);
+    if (inv.challan_id) await refreshStatus(query, inv.challan_id);
+  });
+  return json({ message: "Invoice deleted." + reuse });
 });
 
 route("GET", "/api/invoice-counter", async (c) => {
