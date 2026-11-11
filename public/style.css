@@ -114,12 +114,12 @@ table.lines { border-collapse: collapse; width: 100%; }
 .lines th { font-size: .78rem; text-transform: uppercase; color: #4a5866; text-align: left; padding: .3rem; }
 .lines td { padding: .2rem; vertical-align: middle; }
 .lines input, .lines select { padding: .3rem .35rem; font-size: .9rem; width: auto; margin: 0; }
-.lines input[name=l_description] { min-width: 170px; width: 100%; }
-.lines input[name=l_party_part_no] { width: 110px; }
-.lines input[name=l_hsn] { width: 86px; }
-.lines input[name=l_qty] { width: 70px; } .lines input[name=l_uom] { width: 58px; }
-.lines input[name=l_rate] { width: 78px; }
-.lines input[name=l_amount] { width: 96px; }
+.lines input[name=description] { min-width: 170px; width: 100%; }
+.lines input[name=party_part_no] { width: 110px; }
+.lines input[name=hsn] { width: 86px; }
+.lines input[name=qty] { width: 70px; } .lines input[name=uom] { width: 58px; }
+.lines input[name=rate] { width: 78px; }
+.lines input[name=amount] { width: 96px; }
 .lines td:nth-child(4) { width: 100%; }
 .lines select.prod { width: 170px; }
 .lines .newbox { display: inline-flex; gap: .3rem; align-items: center; white-space: nowrap; }
@@ -199,3 +199,4 @@ table.label td:first-child { width: 34%; }
   .inv-page:last-child { break-after: auto; }
   table.inv tr.hl td, table.inv tr.th td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+.lines td.bn { white-space: nowrap; font-weight: 600; } .lines input[name=box_qty] { width: 110px; } .lines select[name=box_line] { width: 220px; }
