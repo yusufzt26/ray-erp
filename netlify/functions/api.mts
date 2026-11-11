@@ -39,6 +39,7 @@ const num = (v: unknown) => {
   return Number.isNaN(n) ? null : n;
 };
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v).trim());
+const segmentOf = (v: unknown) => (str(v).toUpperCase() === "NPD" ? "NPD" : "Regular");
 const isoDate = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(str(v)) ? str(v) : null);
 
 // ---------------------------------------------------------------- masters
@@ -259,7 +260,7 @@ route("POST", "/api/m/:master/import", async (c) => {
 });
 
 // ---------------------------------------------------------------- documents
-const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, subtotal, tax_amount, total_amount, notes, pdf_file, status, eway, created_at";
+const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, subtotal, tax_amount, total_amount, notes, pdf_file, status, eway, segment, created_at";
 
 route("GET", "/api/d/:type", async (c) => {
   docTypeOf(c.params.type);
@@ -267,7 +268,9 @@ route("GET", "/api/d/:type", async (c) => {
   const qs = str(new URL(c.req.url).searchParams.get("q"));
   const params: unknown[] = [c.params.type];
   let sql = `SELECT ${DOC_COLS} FROM documents WHERE doc_type = $1`;
-  if (qs) { params.push(`%${qs}%`); sql += " AND (doc_no ILIKE $2 OR ref_no ILIKE $2 OR party_name ILIKE $2)"; }
+  if (qs) { params.push(`%${qs}%`); sql += ` AND (doc_no ILIKE $${params.length} OR ref_no ILIKE $${params.length} OR party_name ILIKE $${params.length})`; }
+  const seg = str(new URL(c.req.url).searchParams.get("segment"));
+  if (seg) { params.push(segmentOf(seg)); sql += ` AND segment = $${params.length}`; }
   return json({ rows: await q(sql + " ORDER BY id DESC", params) });
 });
 
@@ -360,6 +363,7 @@ route("POST", "/api/d/:type/save", async (c) => {
       doc_no: str(b.doc_no), doc_date: isoDate(b.doc_date), party_id: partyId, party_name: partyName, party_gstin: partyGstin,
       delivery_date: isoDate(b.delivery_date), subtotal, tax_amount: total ? Math.round((total - subtotal) * 100) / 100 : null,
       total_amount: total, notes: str(b.notes), status: d.statuses.includes(b.status) ? b.status : d.statuses[0],
+      segment: segmentOf(b.segment),
     };
     if (!did && num(b.parent_id)) (header as any).parent_id = num(b.parent_id);
     const dup = header.doc_no ? (await query("SELECT ref_no FROM documents WHERE doc_type = $1 AND doc_no = $2 AND party_name = $3 AND id <> $4",
@@ -488,7 +492,7 @@ route("PUT", "/api/settings", async (c) => {
 // ---------------------------------------------------------------- sales invoices
 const INV_COLS = `id, inv_no, to_char(inv_date, 'YYYY-MM-DD') AS inv_date, customer_id, customer_po_id, po_no,
   to_char(po_date, 'YYYY-MM-DD') AS po_date, supplier_code, bill_to, ship_to, gstin, pan, tax_type, gst_rate,
-  subtotal, cgst, sgst, igst, total, delivery_condition, payment_terms, packing, status, eway, created_at`;
+  subtotal, cgst, sgst, igst, total, delivery_condition, payment_terms, packing, status, eway, segment, created_at`;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Financial year label: Apr 2026 - Mar 2027 -> "26". */
@@ -505,9 +509,11 @@ route("GET", "/api/invoices", async (c) => {
   require(c, "sales_invoice");
   const qs = str(new URL(c.req.url).searchParams.get("q"));
   const params: unknown[] = [];
-  let sql = `SELECT i.id, i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, i.po_no, i.total, i.status, cu.name AS customer
-    FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id`;
-  if (qs) { params.push(`%${qs}%`); sql += " WHERE i.inv_no ILIKE $1 OR i.po_no ILIKE $1 OR cu.name ILIKE $1"; }
+  let sql = `SELECT i.id, i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, i.po_no, i.total, i.status, i.segment, cu.name AS customer
+    FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id WHERE TRUE`;
+  if (qs) { params.push(`%${qs}%`); sql += " AND (i.inv_no ILIKE $1 OR i.po_no ILIKE $1 OR cu.name ILIKE $1)"; }
+  const seg = str(new URL(c.req.url).searchParams.get("segment"));
+  if (seg) { params.push(segmentOf(seg)); sql += ` AND i.segment = $${params.length}`; }
   const rows = await q(sql + " ORDER BY i.id DESC", params);
   if (c.perms.accounts !== "none") {
     const st = Object.fromEntries((await billStatus("in")).rows.map((r) => [r.id, r]));
@@ -536,7 +542,7 @@ route("GET", "/api/invoices/from-doc/:id", async (c) => {
   const pmap = Object.fromEntries(prods.map((p) => [p.id, p]));
   const lines = prog.lines.filter((l: any) => l.pending > 0).map((l: any) => ({ ...l, ...(pmap[l.product_id] || {}), qty: l.pending }));
   if (!lines.length) fail(400, "Everything on this document has already been invoiced.");
-  return json({ po: po || { ...src, doc_no: "", doc_date: null, id: null }, lines, challan: src.doc_type === "delivery_challan" ? { id: src.id, ref_no: src.ref_no } : null, party_id: src.party_id });
+  return json({ segment: src.segment || po?.segment || "Regular", po: po || { ...src, doc_no: "", doc_date: null, id: null }, lines, challan: src.doc_type === "delivery_challan" ? { id: src.id, ref_no: src.ref_no } : null, party_id: src.party_id });
 });
 
 route("GET", "/api/invoices/from-po/:id", async (c) => {
@@ -590,7 +596,7 @@ route("POST", "/api/invoices/save", async (c) => {
     gstin: str(b.gstin).toUpperCase() || cust.gstin, pan: str(b.pan).toUpperCase() || cust.pan, tax_type: taxType, gst_rate: gstRate,
     subtotal, cgst, sgst, igst, total, delivery_condition: str(b.delivery_condition), payment_terms: str(b.payment_terms),
     packing: JSON.stringify(packing), status: ["Issued", "Cancelled"].includes(b.status) ? b.status : "Issued",
-    challan_id: num(b.challan_id),
+    challan_id: num(b.challan_id), segment: segmentOf(b.segment),
   };
   const res = await tx(async (query) => {
     let invId = id, invNo: string;
@@ -740,7 +746,7 @@ route("GET", "/api/convert/:id/:target", async (c) => {
     status: td.statuses[0], total_amount: target === "vendor_invoice" ? null : Math.round(sub * (ratio || 1) * 100) / 100,
     doc_no: target === "customer_po" ? "" : target === "vendor_invoice" ? "" : null,
     notes: `From ${(DOC_TYPES as any)[src.doc_type].singular} ${src.ref_no}${!fromOwn && src.doc_no ? ` (${src.doc_no})` : ""}`,
-    delivery_date: src.delivery_date,
+    delivery_date: src.delivery_date, segment: src.segment || "Regular",
   };
   return json({ doc, lines, source: { type: src.doc_type, id: src.id, ref_no: src.ref_no } });
 });
@@ -1138,9 +1144,10 @@ route("GET", "/api/reports/sales", async (c) => {
   const sp = new URL(c.req.url).searchParams;
   const from = isoDate(sp.get("from")) || "1900-01-01", to = isoDate(sp.get("to")) || "2999-12-31";
   const rows = await q(`SELECT i.id, i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, to_char(i.inv_date, 'YYYY-MM') AS month,
-      cu.name AS customer, i.gstin, i.po_no, i.subtotal, i.cgst, i.sgst, i.igst, i.total
+      cu.name AS customer, i.gstin, i.po_no, i.subtotal, i.cgst, i.sgst, i.igst, i.total, i.segment
     FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id
-    WHERE i.status <> 'Cancelled' AND i.inv_date BETWEEN $1 AND $2 ORDER BY i.inv_date, i.id`, [from, to]);
+    WHERE i.status <> 'Cancelled' AND i.inv_date BETWEEN $1 AND $2 AND ($3 = '' OR i.segment = $3) ORDER BY i.inv_date, i.id`,
+    [from, to, sp.get("segment") ? segmentOf(sp.get("segment")) : ""]);
   return json({ rows });
 });
 

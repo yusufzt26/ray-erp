@@ -178,6 +178,7 @@ await p.selectOption("#party_id", "1");
 await p.selectOption("#lines tr:first-child [name=product_id]", "1");
 await p.fill("#lines tr:first-child [name=qty]", "100"); await p.fill("#lines tr:first-child [name=rate]", "10");
 await p.fill("[name=total_amount]", "1180");
+await p.selectOption("[name=segment]", "NPD");
 await p.click("button:has-text('Save Quotation')");
 await p.waitForSelector("text=QTN-00001 saved");
 ok(true, "quotation saved with automatic number");
@@ -207,6 +208,15 @@ await p.click("text=Make Invoice"); await p.waitForSelector("text=New Sales Invo
 ok(await p.inputValue("#lines tr:first-child [name=qty]") === "40", "invoice from sales order takes only the balance");
 await p.click("button:has-text('Save invoice')"); await p.waitForSelector("text=R/26-007 saved", { timeout: 15000 });
 ok(await statusOf("customer_po", soId) === "Completed", "sales order completed");
+{
+  const npdSO = (await getJ("/api/d/customer_po?segment=NPD")).rows.map((r) => r.id);
+  const regSO = (await getJ("/api/d/customer_po?segment=Regular")).rows.map((r) => r.id);
+  const npdInv = (await getJ("/api/invoices?segment=NPD")).rows.map((r) => r.inv_no);
+  ok(npdSO.includes(soId) && !regSO.includes(soId), "NPD tag carried from quotation to sales order, list filter works");
+  ok(npdInv.includes("R/26-006") && npdInv.includes("R/26-007") && (await statusOf("delivery_challan", dcId)) && (await getJ("/api/d/delivery_challan/" + dcId)).doc.segment === "NPD", "NPD tag carried to challan and invoices");
+  await p.goto(U + "/#/invoices?segment=NPD"); await p.waitForSelector("h1:has-text(\"Sales Invoices\")");
+  ok((await p.textContent("main")).includes("NPD") && !(await p.textContent("main")).includes("R/26-005"), "invoice list filtered to NPD");
+}
 const led = await getJ("/api/stock/item/1");
 ok(led.rows.filter((r) => /Dispatched/.test(r.kind) && ["DC-00001", "R/26-007"].includes(r.ref)).length === 2 && !led.rows.some((r) => r.ref === "R/26-006"), "stock counts challan, not its invoice again");
 await p.goto(U + "/#/"); await p.waitForSelector(".kpis"); await p.goto(U + "/#/d/quotation/" + (soId - 1) + "/print"); await p.waitForSelector(".inv-page");

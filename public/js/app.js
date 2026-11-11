@@ -95,6 +95,8 @@ function layout(body) {
   $("#logout").onclick = async (e) => { e.preventDefault(); await api("POST", "/api/logout", {}); S.user = null; location.hash = "#/login"; };
 }
 
+export const segmentSelect = (seg) => `<select name="segment" onchange="this.form.requestSubmit()"><option value="">All (Regular + NPD)</option>
+  <option value="Regular" ${seg === "Regular" ? "selected" : ""}>Regular production</option><option value="NPD" ${seg === "NPD" ? "selected" : ""}>NPD</option></select>`;
 const errorBox = (errs) => (errs?.length ? `<div class="flash error">${errs.map(h).join("<br>")}</div>` : "");
 
 // ------------------------------------------------------------------ pages
@@ -362,8 +364,9 @@ async function sheetToRows(master, file) {
 // ------------------------------------------------------------------ documents
 pages.docList = async (type) => {
   const d = DOC_TYPES[type];
-  const qs = new URLSearchParams(location.hash.split("?")[1] || "").get("q") || "";
-  const { rows } = await api("GET", `/api/d/${type}?` + new URLSearchParams({ q: qs }));
+  const sp = new URLSearchParams(location.hash.split("?")[1] || "");
+  const qs = sp.get("q") || "", seg = sp.get("segment") || "";
+  const { rows } = await api("GET", `/api/d/${type}?` + new URLSearchParams({ q: qs, segment: seg }));
   layout(`
     <div class="head"><h1>${d.title} <small>(${rows.length})</small></h1>
       <div class="actions">
@@ -371,11 +374,12 @@ pages.docList = async (type) => {
           : `<a class="btn primary" href="#/d/${type}/new">＋ New ${h(d.singular)}</a>`) : ""}
         <button class="btn" id="exx">⬇ Excel</button><button class="btn" id="exc">⬇ CSV</button>
       </div></div>
-    <form class="filters" id="flt"><input name="q" value="${h(qs)}" placeholder="Search ${h(d.noLabel)}, ref or ${d.partyLabel.toLowerCase()}…"><button class="btn">Search</button></form>
+    <form class="filters" id="flt"><input name="q" value="${h(qs)}" placeholder="Search ${h(d.noLabel)}, ref or ${d.partyLabel.toLowerCase()}…">
+      ${segmentSelect(seg)}<button class="btn">Search</button></form>
     <div class="scroll"><table class="grid">
       <tr><th>Ref</th><th>${h(d.noLabel)}</th><th>${h(d.dateLabel)}</th><th>${d.partyLabel}</th><th class="num">Total</th><th>Status</th><th>PDF</th></tr>
       ${rows.map((r) => `<tr class="click" data-href="#/d/${type}/${r.id}"><td><b>${h(r.ref_no)}</b></td><td>${h(r.doc_no)}</td><td>${h(r.doc_date)}</td>
-        <td>${h(r.party_name)}</td><td class="num">${money(r.total_amount)}</td><td><span class="pill">${h(r.status)}</span></td><td>${r.pdf_file ? "📄" : ""}</td></tr>`).join("")
+        <td>${h(r.party_name)}</td><td class="num">${money(r.total_amount)}</td><td><span class="pill">${h(r.status)}</span>${r.segment === "NPD" ? ' <span class="pill npd">NPD</span>' : ""}</td><td>${r.pdf_file ? "📄" : ""}</td></tr>`).join("")
         || `<tr><td colspan="7" class="muted">No ${d.title.toLowerCase()} yet.</td></tr>`}
     </table></div>`);
   $("#flt").onsubmit = (e) => { e.preventDefault(); location.hash = `#/d/${type}?` + new URLSearchParams(new FormData(e.target)); };
@@ -505,6 +509,7 @@ pages.docForm = async (type, id, preset = null) => {
         <label>${h(d.dateLabel)}<input name="doc_date" type="date" value="${h(doc.doc_date)}" class="${cls(found?.doc_date)}"></label>
         ${type === "customer_po" ? `<label>Delivery date<input name="delivery_date" type="date" value="${h(doc.delivery_date)}" class="${found && doc.delivery_date ? "auto" : ""}"></label>` : ""}
         <label>Status<select name="status">${d.statuses.map((s) => `<option ${doc.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+        <label>Type<select name="segment">${["Regular", "NPD"].map((s) => `<option value="${s}" ${(doc.segment || "Regular") === s ? "selected" : ""}>${s === "NPD" ? "NPD (new product development)" : "Regular production"}</option>`).join("")}</select></label>
       </div></fieldset></div>
       ${pdfUrl ? `<div class="pdfpane"><iframe src="${pdfUrl}" title="PDF"></iframe>
         <a href="${pdfUrl}" target="_blank" rel="noopener">Open PDF in new tab</a>
@@ -587,7 +592,7 @@ pages.docForm = async (type, id, preset = null) => {
   $("#f").onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const body = Object.fromEntries(["party_id", "party_name", "party_gstin", "doc_no", "doc_date", "delivery_date", "status", "total_amount", "notes"].map((k) => [k, fd.get(k)]));
+    const body = Object.fromEntries(["party_id", "party_name", "party_gstin", "doc_no", "doc_date", "delivery_date", "status", "segment", "total_amount", "notes"].map((k) => [k, fd.get(k)]));
     body.create_party = fd.has("create_party");
     body.parent_id = doc.parent_id || null;
     body.id = doc.id || null;

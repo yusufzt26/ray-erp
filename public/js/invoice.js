@@ -59,16 +59,19 @@ export function invoicePages(ctx) {
   const { api, layout, can, flash, $, $$, errorBox, busy } = ctx;
 
   async function list() {
-    const qs = new URLSearchParams(location.hash.split("?")[1] || "").get("q") || "";
-    const { rows } = await api("GET", "/api/invoices?" + new URLSearchParams({ q: qs }));
+    const sp = new URLSearchParams(location.hash.split("?")[1] || "");
+    const qs = sp.get("q") || "", seg = sp.get("segment") || "";
+    const { rows } = await api("GET", "/api/invoices?" + new URLSearchParams({ q: qs, segment: seg }));
     layout(`
       <div class="head"><h1>Sales Invoices <small>(${rows.length})</small></h1>
         <div class="actions">${can("sales_invoice", "edit") ? '<a class="btn primary" href="#/invoices/new">＋ New Invoice</a>' : ""}</div></div>
-      <form class="filters" id="flt"><input name="q" value="${h(qs)}" placeholder="Search invoice no, PO no or customer…"><button class="btn">Search</button></form>
+      <form class="filters" id="flt"><input name="q" value="${h(qs)}" placeholder="Search invoice no, PO no or customer…">
+        <select name="segment" onchange="this.form.requestSubmit()"><option value="">All (Regular + NPD)</option>
+          <option value="Regular" ${seg === "Regular" ? "selected" : ""}>Regular production</option><option value="NPD" ${seg === "NPD" ? "selected" : ""}>NPD</option></select><button class="btn">Search</button></form>
       <div class="scroll"><table class="grid">
         <tr><th>Invoice No</th><th>Date</th><th>Customer</th><th>PO No</th><th class="num">Grand Total</th><th>Status</th>${rows.some((r) => r.pay_status) ? '<th>Payment</th><th class="num">Balance</th>' : ""}</tr>
         ${rows.map((r) => `<tr class="click ${r.status === "Cancelled" ? "inactive" : ""}" data-href="#/invoices/${r.id}"><td><b>${h(r.inv_no)}</b></td>
-          <td>${dmy(r.inv_date)}</td><td>${h(r.customer)}</td><td>${h(r.po_no)}</td><td class="num">${money(r.total)}</td><td><span class="pill">${h(r.status)}</span></td>
+          <td>${dmy(r.inv_date)}</td><td>${h(r.customer)}</td><td>${h(r.po_no)}</td><td class="num">${money(r.total)}</td><td><span class="pill">${h(r.status)}</span>${r.segment === "NPD" ? ' <span class="pill npd">NPD</span>' : ""}</td>
           ${r.pay_status ? `<td><span class="pill ${r.pay_status === "Paid" ? "ok" : r.pay_status === "Part paid" ? "warn" : ""}">${h(r.pay_status)}</span></td><td class="num">${r.balance > 0.5 ? money(r.balance) : ""}</td>` : rows.some((x) => x.pay_status) ? "<td></td><td></td>" : ""}</tr>`).join("")
           || '<tr><td colspan="6" class="muted">No invoices yet. Open a Customer PO and press "Make Invoice", or press "New Invoice".</td></tr>'}
       </table></div>`);
@@ -133,6 +136,7 @@ export function invoicePages(ctx) {
           <label>Customer GSTIN<input name="gstin" class="upper" maxlength="15" value="${h(inv.gstin)}"></label>
           <label>Customer PAN<input name="pan" class="upper" maxlength="10" value="${h(inv.pan)}"></label>
           <label>Status<select name="status">${["Issued", "Cancelled"].map((s) => `<option ${inv.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+          <label>Type<select name="segment">${["Regular", "NPD"].map((s) => `<option value="${s}" ${(inv.segment || "Regular") === s ? "selected" : ""}>${s === "NPD" ? "NPD (new product development)" : "Regular production"}</option>`).join("")}</select></label>
           <label class="half">Bill To<textarea name="bill_to" rows="5">${h(inv.bill_to)}</textarea></label>
           <label class="half">Ship To<textarea name="ship_to" rows="5">${h(inv.ship_to)}</textarea></label>
         </div>
@@ -294,11 +298,11 @@ export function invoicePages(ctx) {
   }
 
   async function poToInvoice(poId, customers) {
-    const { po, lines, challan, party_id } = await api("GET", `/api/invoices/from-doc/${poId}`);
+    const { po, lines, challan, party_id, segment } = await api("GET", `/api/invoices/from-doc/${poId}`);
     const c = customers.find((c) => c.id === party_id);
     const rates = lines.map((l) => l.gst_rate).filter((r) => r !== null && r !== undefined);
     return {
-      customer_id: party_id, customer_po_id: po.id, challan_id: challan?.id || null, po_no: po.doc_no, po_date: po.doc_date,
+      segment, customer_id: party_id, customer_po_id: po.id, challan_id: challan?.id || null, po_no: po.doc_no, po_date: po.doc_date,
       supplier_code: c?.supplier_code || "", gstin: c?.gstin || po.party_gstin || "", pan: c?.pan || "",
       bill_to: billToFor(c) || po.party_name, ship_to: c?.ship_to || billToFor(c) || po.party_name,
       delivery_condition: c?.delivery_condition || "", payment_terms: c?.payment_terms || "",

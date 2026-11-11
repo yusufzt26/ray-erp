@@ -296,3 +296,4 @@ table.bank td { vertical-align: top; }
 table.bank .det { min-width: 240px; }
 table.bank .det .bills { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
 table.bank .det input.qty { width: 100px; margin-left: 4px; }
+.pill.npd { background: #ede4fb; color: #5b2ea6; font-weight: 600; }

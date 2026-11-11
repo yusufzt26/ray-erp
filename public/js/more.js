@@ -187,7 +187,8 @@ export function morePages(ctx) {
   async function salesRegister() {
     const p = params();
     const from = p.get("from") || fyStart(), to = p.get("to") || today();
-    const { rows } = await api("GET", "/api/reports/sales?" + new URLSearchParams({ from, to }));
+    const seg = p.get("segment") || "";
+    const { rows } = await api("GET", "/api/reports/sales?" + new URLSearchParams({ from, to, segment: seg }));
     const sum = (list, k) => r2(list.reduce((t, r) => t + Number(r[k] || 0), 0));
     const group = (key) => {
       const m = new Map();
@@ -199,7 +200,7 @@ export function morePages(ctx) {
     const tot = { subtotal: sum(rows, "subtotal"), cgst: sum(rows, "cgst"), sgst: sum(rows, "sgst"), igst: sum(rows, "igst"), total: sum(rows, "total") };
     const view = p.get("view") || "month";
     const tabs = [["month", "By month"], ["customer", "By customer"], ["invoices", "All invoices"]];
-    const qsFor = (v) => "#/sales-register?" + new URLSearchParams({ from, to, view: v });
+    const qsFor = (v) => "#/sales-register?" + new URLSearchParams({ from, to, view: v, segment: seg });
     let table;
     if (view === "invoices") {
       table = `<tr><th>Invoice No</th><th>Date</th><th>Customer</th><th>GSTIN</th><th class="num">Taxable</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">IGST</th><th class="num">Total</th></tr>
@@ -219,6 +220,7 @@ export function morePages(ctx) {
         <label class="inline">From <input type="date" name="from" value="${from}"></label>
         <label class="inline">To <input type="date" name="to" value="${to}"></label>
         <input type="hidden" name="view" value="${view}">
+        <select name="segment"><option value="">All (Regular + NPD)</option><option value="Regular" ${seg === "Regular" ? "selected" : ""}>Regular production</option><option value="NPD" ${seg === "NPD" ? "selected" : ""}>NPD</option></select>
         <button class="btn">Show</button>
       </form>
       <div class="quick">
