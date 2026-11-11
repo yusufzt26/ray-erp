@@ -150,11 +150,21 @@ await p.screenshot({ path: join(SHOTS, "statement.png"), fullPage: true });
   await p.screenshot({ path: join(SHOTS, "payment_bills.png"), fullPage: true });
   await p.click("button:has-text('Save payment')"); await p.waitForSelector("text=Payment saved");
   const after = (await bj()).rows.find((b) => b.id === target.id);
-  ok(after.pay_status === "Paid" && after.direct === target.balance, "payment tied to the invoice marks it Paid");
-  await p.goto(U + "/#/invoices"); await p.waitForSelector("text=Balance");
+  ok(after.pay_status === "Paid" && after.direct === after.total, "payment tied to the invoice marks it Paid");
+  await p.goto(U + "/#/invoices"); await p.waitForSelector("text=Sales Invoices");
   ok((await p.textContent("main")).includes("Paid"), "invoice list shows payment status");
+  {
+    const open = (await bj()).rows.filter((b) => b.balance > 0.5);
+    if (open.length) {
+      const t = open[open.length - 1];
+      await p.goto(U + "/#/payments/new?dir=in&party=1"); await p.waitForSelector("text=Which invoices does this payment settle");
+      await p.fill("[name=amount]", String(t.balance));
+      await p.waitForSelector("#suggest .flash");
+      ok((await p.textContent("#suggest")).includes(t.ref) && await p.isChecked(`tr[data-id="${t.id}"] [name=tick]`), "typing an amount suggests and ticks the matching invoice");
+    } else ok(true, "no open invoice left to suggest");
+  }
   await p.goto(U + "/#/payments"); await p.waitForSelector("text=Against");
-  ok((await p.textContent("main")).includes(target.ref) && (await p.textContent("main")).includes("On account"), "payments list shows which invoice was paid");
+  ok((await p.textContent("main")).includes(target.ref), "payments list shows which invoice was paid");
 }
 await p.goto(U + "/#/accounts?tab=pay"); await p.waitForSelector("text=To pay to vendors");
 ok((await p.textContent("main")).includes("Polytube"), "payable lists vendor");

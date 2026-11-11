@@ -348,7 +348,60 @@ export function morePages(ctx) {
     const form = $("#f");
     let bills = [];
     let amountTyped = !!p.get("amount") && !p.get("bill");
-    form.amount.addEventListener("input", () => { amountTyped = true; summary(); });
+    let manual = !!p.get("bill");
+    form.amount.addEventListener("input", () => { amountTyped = true; if (!manual) suggest(); else summary(); });
+
+    // Which open bills does this amount most likely pay? Exact single bill, then a run of oldest bills,
+    // then any combination; if nothing adds up exactly, oldest first with the last one part paid.
+    const matchBills = (amt) => {
+      const open = bills.map((b) => ({ id: b.id, ref: b.ref, bal: b.balance }));
+      const near = (x) => Math.abs(x - amt) <= 1;
+      const one = open.find((b) => near(b.bal));
+      if (one) return { kind: "exact", pick: [{ ...one, use: one.bal }] };
+      let run = 0;
+      for (let i = 0; i < open.length; i++) {
+        run = r2(run + open[i].bal);
+        if (near(run)) return { kind: "exact", pick: open.slice(0, i + 1).map((b) => ({ ...b, use: b.bal })) };
+        if (run > amt + 1) break;
+      }
+      let best = null, steps = 0;
+      const dfs = (i, sum, chosen) => {
+        if (best || ++steps > 200000) return;
+        if (near(sum) && chosen.length) { best = chosen.slice(); return; }
+        if (sum > amt + 1 || i >= open.length) return;
+        chosen.push(open[i]); dfs(i + 1, sum + open[i].bal, chosen); chosen.pop();
+        dfs(i + 1, sum, chosen);
+      };
+      if (open.length <= 40) dfs(0, 0, []);
+      if (best) return { kind: "exact", pick: best.map((b) => ({ ...b, use: b.bal })) };
+      let left = amt;
+      const pick = [];
+      for (const b of open) { if (left <= 0.005) break; const use = r2(Math.min(left, b.bal)); pick.push({ ...b, use }); left = r2(left - use); }
+      return { kind: "oldest", pick, extra: left };
+    };
+    const applyPick = (pick) => {
+      const use = Object.fromEntries(pick.map((b) => [String(b.id), b.use]));
+      $$("#bills tr[data-id]").forEach((tr) => {
+        const v = use[tr.dataset.id];
+        $("[name=pay]", tr).value = v ? v : "";
+        $("[name=tick]", tr).checked = !!v;
+        tr.classList.toggle("hit", !!v);
+      });
+      summary();
+    };
+    const suggest = () => {
+      const box = $("#suggest");
+      if (!box) return;
+      const amt = num(form.amount.value);
+      if (!(amt > 0) || !bills.length) { box.innerHTML = ""; if (!manual) applyPick([]); return; }
+      const m = matchBills(amt);
+      const names = m.pick.map((b) => `${h(b.ref)}${b.use < b.bal - 0.005 ? ` (part ₹ ${money(b.use)})` : ""}`).join(" + ");
+      box.innerHTML = m.kind === "exact"
+        ? `<div class="flash ok">✓ ₹ ${money(amt)} matches <b>${names}</b> exactly. These are ticked below. Change them if the customer paid other bills.</div>`
+        : `<div class="flash warn">No ${dir === "in" ? "invoice" : "bill"} or group adds up to exactly ₹ ${money(amt)}. Suggested, oldest first: <b>${names}</b>${m.extra > 0.5 ? `, and ₹ ${money(m.extra)} kept as advance` : ""}.
+            ${dir === "in" ? "If the customer deducted TDS or a debit note, tick the bills yourself." : ""}</div>`;
+      applyPick(m.pick);
+    };
     const inputs = () => $$("#bills input[name=pay]");
     const tied = () => r2(inputs().reduce((t, i) => t + num(i.value), 0));
     const summary = () => {
@@ -375,33 +428,24 @@ export function morePages(ctx) {
             <td class="num"><b>${money(x.balance)}</b></td>
             <td class="num"><input name="pay" inputmode="decimal" class="qty" value="${String(x.id) === pre ? x.balance : ""}"></td></tr>`).join("")}
         </table></div>
-        <div class="buttons"><button type="button" class="btn small" id="oldest">Settle oldest first from the amount</button>
+        <div class="buttons"><button type="button" class="btn small" id="oldest">Suggest from the amount</button>
           <button type="button" class="btn small" id="clear">Clear</button></div>`
         : `<p class="muted">No open ${dir === "in" ? "invoices" : "bills"} for this party. The payment will be kept as an advance.</p>`}
         <p id="alloc"></p>`;
+      if (bills.length) $("#bills h2").insertAdjacentHTML("afterend", '<div id="suggest"></div>');
       $$("#bills tr[data-id]").forEach((tr) => {
         const x = bills.find((b) => String(b.id) === tr.dataset.id);
         const tick = $("[name=tick]", tr), pay = $("[name=pay]", tr);
-        tick.onchange = () => { pay.value = tick.checked ? x.balance : ""; syncAmount(); };
-        pay.oninput = () => { tick.checked = num(pay.value) > 0; syncAmount(); };
+        tick.onchange = () => { manual = true; pay.value = tick.checked ? x.balance : ""; syncAmount(); };
+        pay.oninput = () => { manual = true; tick.checked = num(pay.value) > 0; syncAmount(); };
       });
       const oldest = $("#oldest");
-      if (oldest) oldest.onclick = () => {
-        let left = num(form.amount.value);
-        $$("#bills tr[data-id]").forEach((tr) => {
-          const x = bills.find((b) => String(b.id) === tr.dataset.id);
-          const use = r2(Math.min(left, x.balance));
-          left = r2(left - use);
-          $("[name=pay]", tr).value = use > 0 ? use : "";
-          $("[name=tick]", tr).checked = use > 0;
-        });
-        amountTyped = true; summary();
-      };
+      if (oldest) oldest.onclick = () => { manual = false; amountTyped = true; suggest(); };
       const clear = $("#clear");
       if (clear) clear.onclick = () => { inputs().forEach((i) => (i.value = "")); $$("#bills [name=tick]").forEach((t) => (t.checked = false)); syncAmount(); };
-      if (pre && !amountTyped) syncAmount(); else summary();
+      if (pre && !amountTyped) syncAmount(); else if (!manual && num(form.amount.value) > 0) suggest(); else summary();
     };
-    form.party_id.onchange = () => { p.delete("bill"); loadBills(); };
+    form.party_id.onchange = () => { p.delete("bill"); manual = false; loadBills(); };
     await loadBills();
     form.onsubmit = async (e) => {
       e.preventDefault();

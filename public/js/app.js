@@ -754,7 +754,14 @@ async function loadMe() {
   S = { user: me.user, perms: me.perms || {}, settings: me.settings || S.settings, defaultPw: me.defaultPw };
 }
 
+// A slow page that finishes after a newer one would paint over it; if that happens, draw the current page again.
+let routeSeq = 0, doneSeq = 0;
 async function route() {
+  const seq = ++routeSeq;
+  try { await routeInner(); } finally { if (seq < doneSeq) route(); else doneSeq = seq; }
+}
+
+async function routeInner() {
   const path = (location.hash.slice(1) || "/").split("?")[0];
   if (!S.user && path !== "/login") { location.hash = "#/login"; return; }
   if (path === "/login") return S.user ? (location.hash = "#/") : pages.login();
