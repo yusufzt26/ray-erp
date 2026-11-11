@@ -225,3 +225,6 @@ label.inline input { width: auto; margin: 0; }
 table .btn.small, .lines + .btn.small { margin-top: 0; } .lines + .btn.small { margin-top: .4rem; }
 table.lines.short { width: auto; }
 #bom select.prod { min-width: 340px; }
+
+.install-btn { background: #fff; color: var(--brand); border: 0; border-radius: 8px; padding: .35rem .8rem; font-weight: 700; cursor: pointer; margin-left: auto; margin-right: .8rem; }
+.install-btn + .who { margin-left: 0; }

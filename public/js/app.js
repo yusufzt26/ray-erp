@@ -40,6 +40,18 @@ function busy(btn, on, label) {
   else { btn.disabled = false; if (btn.dataset.label) btn.innerHTML = btn.dataset.label; }
 }
 
+// ------------------------------------------------------------------ install as an app
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; addInstallButton(); });
+function addInstallButton() {
+  const who = document.querySelector("header.top .who");
+  if (!installPrompt || !who || document.getElementById("install")) return;
+  who.insertAdjacentHTML("beforebegin", '<button class="install-btn" id="install">⬇ Install app</button>');
+  document.getElementById("install").onclick = async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; document.getElementById("install")?.remove(); };
+}
+window.addEventListener("appinstalled", () => { installPrompt = null; document.getElementById("install")?.remove(); });
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
 // ------------------------------------------------------------------ layout
 function layout(body) {
   const r = location.hash;
@@ -68,6 +80,7 @@ function layout(body) {
     <div class="layout"><nav class="side" onclick="document.body.classList.remove('nav-open')">${side}</nav>
     <main>${flashes.map((f) => `<div class="flash ${f.kind}">${h(f.msg)}</div>`).join("")}${body}</main></div>`;
   flashes = [];
+  addInstallButton();
   $("#logout").onclick = async (e) => { e.preventDefault(); await api("POST", "/api/logout", {}); S.user = null; location.hash = "#/login"; };
 }
 
