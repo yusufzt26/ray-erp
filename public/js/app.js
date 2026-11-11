@@ -4,6 +4,7 @@ import { invoicePages } from "./invoice.js";
 import { morePages } from "./more.js";
 import { linksPanel } from "./links.js";
 import { docPrint } from "./docprint.js";
+import { ewayPage } from "./eway.js";
 import { DASHBOARDS, defaultDash, renderDash } from "./dash.js";
 
 // ------------------------------------------------------------------ helpers
@@ -473,6 +474,7 @@ pages.docForm = async (type, id, preset = null) => {
     <div class="head"><h1>${doc.id ? `${d.singular} <span class="code">${h(doc.ref_no)}</span>` : `New ${d.singular}`}</h1>
       <div class="actions">${doc.id ? convertButtons(type, doc) : ""}
       ${doc.id && d.printTitle ? `<a class="btn" href="#/d/${type}/${doc.id}/print">🖨 Print</a>` : ""}
+      ${doc.id && type === "delivery_challan" ? `<a class="btn" href="#/eway/delivery_challan/${doc.id}">🚛 E-way bill${doc.eway?.ewb_no ? " ✓" : ""}</a>` : ""}
       <a class="btn" href="#/d/${type}">← Back to list</a></div></div>
     ${preset?.source ? `<div class="flash ok">Made from ${h(DOC_TYPES[preset.source.type].singular)} ${h(preset.source.ref_no)}: only the quantity still pending is filled in. Check and save.</div>` : ""}
     <div id="err"></div>
@@ -775,6 +777,10 @@ async function route() {
       if (p[1] === "entry") return await more.stockEntry();
       if (p[1] === "moves") return await more.stockMoves();
       return await more.stockItem(p[1]);
+    }
+    if (p[0] === "eway" && p[2]) {
+      if (!can(p[1] === "invoice" ? "sales_invoice" : p[1])) return pages.forbidden();
+      return await ewayPage({ api, layout, S, can, flash, $, errorBox, busy }, p[1], p[2]);
     }
     if (p[0] === "load-data") return await more.loadData();
     if (p[0] === "sales-register") return can("sales_invoice") ? await more.salesRegister() : pages.forbidden();

@@ -36,6 +36,8 @@ export async function docPrint({ api, layout, S }, type, id) {
             <br><b>GSTIN : ${h(s.company_gstin)}</b> · PAN ${h(s.company_pan)}</td></tr>
         <tr class="hl"><td colspan="2">${h(d.own ? d.noLabel : "Our Ref")}</td><td><b>${h(doc.ref_no)}</b></td>
           <td colspan="${priced ? 2 : 1}">Date</td><td colspan="${priced ? 3 : 2}"><b>${dmy(doc.doc_date)}</b></td></tr>
+        ${doc.eway?.ewb_no || doc.eway?.vehicle_no ? `<tr><td colspan="2">E-way Bill No</td><td><b>${h(doc.eway.ewb_no || "")}</b>${doc.eway.ewb_date ? " dt " + dmy(doc.eway.ewb_date) : ""}</td>
+          <td colspan="${priced ? 2 : 1}">Vehicle No</td><td colspan="${priced ? 3 : 2}"><b>${h(doc.eway.vehicle_no || "")}</b></td></tr>` : ""}
         ${!d.own && doc.doc_no ? `<tr><td colspan="2">${h(d.noLabel)}</td><td colspan="${cols - 2}"><b>${h(doc.doc_no)}</b></td></tr>` : ""}
         <tr class="addr"><td colspan="${priced ? 4 : 3}"><b>${type === "purchase_order" || type === "grn" ? "To / Supplier" : "To"} :</b><br>${nl(partyBlock)}</td>
           <td colspan="${priced ? 4 : 3}">${doc.party_gstin ? `<b>GSTIN :</b> ${h(doc.party_gstin)}<br>` : ""}${doc.delivery_date ? `<b>Delivery by :</b> ${dmy(doc.delivery_date)}<br>` : ""}

@@ -259,7 +259,7 @@ route("POST", "/api/m/:master/import", async (c) => {
 });
 
 // ---------------------------------------------------------------- documents
-const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, subtotal, tax_amount, total_amount, notes, pdf_file, status, created_at";
+const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, subtotal, tax_amount, total_amount, notes, pdf_file, status, eway, created_at";
 
 route("GET", "/api/d/:type", async (c) => {
   docTypeOf(c.params.type);
@@ -488,7 +488,7 @@ route("PUT", "/api/settings", async (c) => {
 // ---------------------------------------------------------------- sales invoices
 const INV_COLS = `id, inv_no, to_char(inv_date, 'YYYY-MM-DD') AS inv_date, customer_id, customer_po_id, po_no,
   to_char(po_date, 'YYYY-MM-DD') AS po_date, supplier_code, bill_to, ship_to, gstin, pan, tax_type, gst_rate,
-  subtotal, cgst, sgst, igst, total, delivery_condition, payment_terms, packing, status, created_at`;
+  subtotal, cgst, sgst, igst, total, delivery_condition, payment_terms, packing, status, eway, created_at`;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Financial year label: Apr 2026 - Mar 2027 -> "26". */
@@ -1111,6 +1111,53 @@ route("GET", "/api/reports/sales", async (c) => {
     FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id
     WHERE i.status <> 'Cancelled' AND i.inv_date BETWEEN $1 AND $2 ORDER BY i.inv_date, i.id`, [from, to]);
   return json({ rows });
+});
+
+// ---------------------------------------------------------------- e-way bill
+// The browser builds the e-way bill upload file; we hand it the data and keep the transport details.
+const EWAY_KINDS: Record<string, string> = { invoice: "sales_invoice", delivery_challan: "delivery_challan" };
+const EWAY_KEYS = ["reason", "mode", "vehicle_no", "transporter_id", "transporter_name", "distance", "trans_doc_no", "trans_doc_date", "ewb_no", "ewb_date"];
+
+async function ewayRecord(kind: string, id: number) {
+  if (kind === "invoice") {
+    const inv = await one(`SELECT ${INV_COLS} FROM invoices WHERE id = $1`, [id]);
+    if (!inv) fail(404, "Not found");
+    const lines = await q(`SELECT l.*, p.name AS product_name, p.gst_rate AS product_gst FROM invoice_lines l
+      LEFT JOIN products p ON p.id = l.product_id WHERE l.invoice_id = $1 ORDER BY l.line_no`, [id]);
+    const party = inv.customer_id ? await one("SELECT * FROM customers WHERE id = $1", [inv.customer_id]) : null;
+    return { doc: inv, lines, party };
+  }
+  const doc = await one(`SELECT ${DOC_COLS} FROM documents WHERE id = $1 AND doc_type = $2`, [id, kind]);
+  if (!doc) fail(404, "Not found");
+  const lines = await q(`SELECT l.*, p.name AS product_name, p.gst_rate AS product_gst FROM document_lines l
+    LEFT JOIN products p ON p.id = l.product_id WHERE l.document_id = $1 ORDER BY l.line_no`, [id]);
+  const party = doc.party_id ? await one("SELECT * FROM customers WHERE id = $1", [doc.party_id]) : null;
+  return { doc, lines, party };
+}
+
+route("GET", "/api/eway/:kind/:id", async (c) => {
+  const mod = EWAY_KINDS[c.params.kind] || fail(404, "E-way bills are made from invoices and delivery challans.");
+  require(c, mod);
+  return json(await ewayRecord(c.params.kind, Number(c.params.id)));
+});
+
+route("PUT", "/api/eway/:kind/:id", async (c) => {
+  const mod = EWAY_KINDS[c.params.kind] || fail(404, "E-way bills are made from invoices and delivery challans.");
+  require(c, mod, "edit");
+  const id = Number(c.params.id);
+  const rec = await ewayRecord(c.params.kind, id);
+  const e: Record<string, any> = { ...(rec.doc.eway || {}) };
+  for (const k of EWAY_KEYS) if (k in (c.body || {})) e[k] = str(c.body[k]);
+  if (e.vehicle_no) e.vehicle_no = e.vehicle_no.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (e.ewb_no) {
+    e.ewb_no = e.ewb_no.replace(/\D/g, "");
+    if (e.ewb_no.length !== 12) fail(400, "The e-way bill number has 12 digits.");
+  }
+  const table = c.params.kind === "invoice" ? "invoices" : "documents";
+  await q(`UPDATE ${table} SET eway = $1 WHERE id = $2`, [JSON.stringify(e), id]);
+  const km = num(e.distance);
+  if (rec.party && km && !rec.party.distance_km) await q("UPDATE customers SET distance_km = $1 WHERE id = $2", [Math.round(km), rec.party.id]);
+  return json({ ok: true, eway: e });
 });
 
 // ---------------------------------------------------------------- accounts

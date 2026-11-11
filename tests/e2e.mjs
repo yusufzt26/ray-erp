@@ -1,6 +1,7 @@
 // Browser test against a running server: node tests/e2e.mjs [baseUrl]
 // (start one first with: node scripts/dev-server.mjs)
 import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 const { chromium } = createRequire(import.meta.url)("playwright");
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -201,6 +202,34 @@ await p.fill("[name=doc_no]", "VB-777"); await p.fill("[name=total_amount]", "35
 await p.click("button:has-text('Save Vendor Invoice')"); await p.waitForSelector("text=saved");
 ok(await statusOf("grn", grnId) === "Billed", "GRN billed after vendor invoice");
 ok(Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance) === rmBefore + 300, "vendor invoice from GRN does not add stock twice");
+
+// e-way bill from an invoice and from a challan
+{
+  const invs = await getJ("/api/invoices");
+  const inv6 = (invs.rows || invs).find((r) => r.inv_no === "R/26-006");
+  await p.goto(U + "/#/invoices/" + inv6.id); await p.waitForSelector("text=E-way bill");
+  await p.click("a:has-text('E-way bill')"); await p.waitForSelector("text=What goes in the file");
+  ok((await p.textContent("#sum")).includes("vehicle number"), "e-way page asks for the vehicle number");
+  await p.fill("[name=vehicle_no]", "mh 14 ab 1234"); await p.fill("[name=distance]", "150");
+  const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#dl")]);
+  const file = JSON.parse(require("node:fs").readFileSync(await dl.path(), "utf8"));
+  const bill = file.billLists[0];
+  ok(dl.suggestedFilename() === "EWB_R_26-006.json", "e-way file named after the invoice");
+  ok(bill.docType === "INV" && bill.docNo === "R/26-006" && bill.vehicleNo === "MH14AB1234" && bill.transDistance === 150
+    && bill.fromGstin === "27BTHPP6918D1ZG" && bill.fromPincode === 412114 && bill.itemList.length === 1 && bill.itemList[0].quantity === 60,
+    "e-way file has the invoice, vehicle, distance and items");
+  ok(Math.abs(bill.totalValue + bill.cgstValue + bill.sgstValue + bill.igstValue + bill.OthValue - bill.totInvValue) < 0.02, "e-way totals add up");
+  await p.screenshot({ path: join(SHOTS, "eway.png"), fullPage: true });
+  await p.fill("[name=ewb_no]", "1234 5678 9012"); await p.click("button:has-text('Save number')");
+  await p.waitForSelector("text=E-way bill number saved");
+  await p.goto(U + "/#/invoices/" + inv6.id + "/print"); await p.waitForSelector(".inv-page");
+  ok((await p.textContent(".inv-page")).includes("123456789012") && (await p.textContent(".inv-page")).includes("MH14AB1234"), "e-way bill no and vehicle print on the invoice");
+  await p.goto(U + "/#/eway/delivery_challan/" + dcId); await p.waitForSelector("text=What goes in the file");
+  await p.selectOption("[name=reason]", "4"); await p.fill("[name=vehicle_no]", "MH12XY9876");
+  const [dl2] = await Promise.all([p.waitForEvent("download"), p.click("#dl")]);
+  const b2 = JSON.parse(require("node:fs").readFileSync(await dl2.path(), "utf8")).billLists[0];
+  ok(b2.docType === "CHL" && b2.subSupplyType === 4 && b2.cgstValue + b2.sgstValue + b2.igstValue === 0, "challan e-way file for job work, no tax");
+}
 
 // users + roles
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");

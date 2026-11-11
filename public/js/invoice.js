@@ -110,6 +110,7 @@ export function invoicePages(ctx) {
     layout(`
       <div class="head"><h1>${id ? `Invoice <span class="code">${h(inv.inv_no)}</span>` : "New Sales Invoice"}</h1>
         <div class="actions">${id ? `<a class="btn primary" href="#/invoices/${id}/print">🖨 Print</a>` : ""}
+          ${id && inv.status !== "Cancelled" ? `<a class="btn" href="#/eway/invoice/${id}">🚛 E-way bill${inv.eway?.ewb_no ? " ✓" : ""}</a>` : ""}
           ${id && can("accounts", "edit") && inv.status !== "Cancelled" ? `<a class="btn" href="#/payments/new?dir=in&party=${inv.customer_id}&amount=${inv.total}&ref=${encodeURIComponent(inv.inv_no)}">💰 Record payment</a>` : ""}<a class="btn" href="#/invoices">← Back</a></div></div>
       <div id="err"></div>
       <form id="f">
@@ -314,6 +315,7 @@ export function invoicePages(ctx) {
         <td colspan="3">State Code : ${h(s.company_state)}</td><td colspan="2">PAN No. ${h(s.company_pan)}</td></tr>
       <tr class="hl"><td colspan="2">Invoice No. :</td><td colspan="2"><b>${h(inv.inv_no)}</b></td><td colspan="3">Invoice Date :</td><td colspan="2" class="c"><b>${dmy(inv.inv_date)}</b></td></tr>
       <tr class="hl"><td colspan="2">PO Number</td><td><b>${h(inv.po_no)}</b></td><td>PO Date: <b>${dmy(inv.po_date)}</b></td><td colspan="3">Supplier Code :</td><td colspan="2" class="c"><b>${h(inv.supplier_code)}</b></td></tr>
+      ${inv.eway?.ewb_no || inv.eway?.vehicle_no ? `<tr class="hl"><td colspan="2">E-way Bill No :</td><td colspan="2"><b>${h(inv.eway.ewb_no || "")}</b>${inv.eway.ewb_date ? " dt " + dmy(inv.eway.ewb_date) : ""}</td><td colspan="3">Vehicle No :</td><td colspan="2" class="c"><b>${h(inv.eway.vehicle_no || "")}</b></td></tr>` : ""}
       <tr class="addr"><td colspan="4"><b>Bill To :</b><br>${nl(inv.bill_to)}</td><td colspan="5"><b>Ship To :</b><br>${nl(inv.ship_to)}</td></tr>
       <tr class="hl"><td colspan="2">GSTIN : <b>${h(inv.gstin)}</b></td><td colspan="2">PAN : <b>${h(inv.pan)}</b></td><td colspan="5">GSTIN : <b>${h(inv.gstin)}</b></td></tr>
       <tr class="th"><td>S No</td><td>MATERIAL CODE</td><td>DESCRIPTION</td><td>HSN</td><td>UOM</td><td>Qty</td><td>Rate</td><td>Disc</td><td>AMOUNT</td></tr>

@@ -59,6 +59,7 @@ const CUSTOMER_FIELDS = [
   F("supplier_code", "Our Supplier Code", { help: "The code this customer gives us; printed on invoices" }),
   F("ship_to", "Ship To Address", { type: "textarea", help: "Leave empty if same as the address" }),
   F("delivery_condition", "Delivery Condition", { help: "e.g. FOB Freeonboard" }),
+  F("distance_km", "Distance (km)", { type: "number", help: "Road distance from our factory, used on e-way bills" }),
   ...PARTY_FIELDS.slice(-2),
 ];
 
