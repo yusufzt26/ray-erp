@@ -296,7 +296,8 @@ function templateRows(master) {
        { name: "PA12 Tube 8x10 Black", category: "RM", purchasable: "Yes", material: "PA12", uom: "MTR", hsn: "39173100", gst_rate: 18, purchase_rate: 22, active: "Yes" }]
     : [{ name: "ABC Motors Pvt Ltd", gstin: "27AABCA1234B1Z5", pan: "AABCA1234B", contact_person: "Mr. Sharma", phone: "9800000000",
         email: "purchase@abc.example", address: "Plot 1, MIDC", city: "Pune", state: "Maharashtra", pincode: "411001", payment_terms: "30 days", active: "Yes" }];
-  const help = [["Column", "Notes"], ["Code", "Leave blank for new records, a code is created automatically. Fill it to update an existing record."],
+  const help = [["Column", "Notes"], ["Code", "Fill it to update that record. Leave blank for new records: a code is created automatically" + (master === "products" ? ", unless an item with the same Customer Material Code (or exactly the same name) exists, which is then updated instead." : ".")],
+    ["Empty cells", "When a record is updated, empty cells leave the saved value as it is."],
     ...m.fields.map((f) => [f.label + (f.required ? " (required)" : ""),
       f.key === "category" ? "One of: " + Object.entries(PRODUCT_CATEGORIES).map(([k, v]) => `${k} (${v})`).join(", ") : f.type === "check" ? "Yes / No" : f.help])];
   return { aoa: [head, ...samples.map((s) => ["", ...m.fields.map((f) => s[f.key] ?? "")])], help };

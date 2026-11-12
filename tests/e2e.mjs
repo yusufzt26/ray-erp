@@ -40,6 +40,21 @@ await p.setInputFiles("input[type=file]", join(dir, "p.csv")); await p.click("#f
 await p.waitForSelector("text=Import result");
 const rep = await p.textContent("#report");
 ok(rep.includes("RM-00001") && rep.includes("BO-00001") && /2\s*added/.test(rep), "CSV import");
+// importing again without codes updates the same items (matched by material code or same name), never adds twice
+writeFileSync(join(dir, "p2.csv"), "Code,Product Name,Customer Material Code / Part No,Category,Unit (UOM),Purchase Rate,Active\n,PA12 Tube 8x10 Black,,RM,MTR,23,\n,Nylon Fuel Line Assy 8x10 L=450 rev B,SAC-FL-0812,FG,NOS,,\n,Old Part Nobody Has,,FG,NOS,,No\n");
+await p.goto(U + "/#/"); await p.waitForSelector(".kpis");
+await p.goto(U + "/#/m/products/import"); await p.waitForSelector("input[type=file]");
+await p.setInputFiles("input[type=file]", join(dir, "p2.csv")); await p.click("#f button");
+await p.waitForSelector("text=Import result");
+{
+  const rep2 = await p.textContent("#report");
+  const all = (await p.evaluate(async () => (await fetch("/api/m/products?show=all")).json())).rows;
+  ok(/0\s*added/.test(rep2) && /2\s*updated/.test(rep2) && rep2.includes("no matching item to mark inactive"), "re-import matches existing items " + rep2.replace(/\s+/g, " ").slice(0, 120));
+  const fg1 = all.find((r) => r.code === "FG-00001"), rm1 = all.find((r) => r.code === "RM-00001");
+  ok(fg1.name === "Nylon Fuel Line Assy 8x10 L=450 rev B" && fg1.drawing_no === "BR20658" && Number(rm1.purchase_rate) === 23 && rm1.hsn === "39173100", "matched items updated, empty cells kept");
+  await p.evaluate(async () => fetch("/api/m/products/import", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "ray-erp" },
+    body: JSON.stringify({ rows: [{ code: "FG-00001", name: "Nylon Fuel Line Assy 8x10 L=450" }] }) }));
+}
 const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#tx")]);
 ok(dl.suggestedFilename() === "products_template.xlsx", "excel template download");
 

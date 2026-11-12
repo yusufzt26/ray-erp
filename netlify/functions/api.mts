@@ -234,11 +234,24 @@ route("POST", "/api/m/:master/import", async (c) => {
       if (code) {
         existing = (await query(`SELECT * FROM ${m.table} WHERE code = $1`, [code]))[0];
         if (!existing) { errors.push([n, `Code ${code} not found. Leave Code blank to add a new record.`]); continue; }
+      } else if (master === "products") {
+        // no item code: find the same product by customer material code / part no, else by exactly the same name,
+        // so a re-imported list updates items instead of adding them twice
+        const cpn = str(row.customer_part_no).replace(/\s+/g, "").toUpperCase();
+        const hits = cpn
+          ? await query("SELECT * FROM products WHERE upper(regexp_replace(COALESCE(customer_part_no, ''), '\\s', '', 'g')) = $1 ORDER BY active DESC, id", [cpn])
+          : [];
+        const byName = !hits.length && str(row.name)
+          ? await query("SELECT * FROM products WHERE lower(trim(name)) = lower($1) ORDER BY active DESC, id", [str(row.name)]) : [];
+        existing = hits[0] || (byName.length === 1 ? byName[0] : null);
+        if (!existing && !values.name) errs.push("Name is empty");
+        if (!existing && values.active === 0) { errors.push([n, `${str(row.name) || cpn}: no matching item to mark inactive, skipped.`]); continue; }
       } else if (!values.name) errs.push("Name is empty");
       if (errs.length) { errors.push([n, errs.join("; ")]); continue; }
       if (existing) {
         if (master === "products") delete values.category;
-        if ("active" in row && str(row.active) === "") delete values.active;
+        // an empty cell leaves the saved value as it is
+        for (const k of Object.keys(values)) if (str(row[k]) === "") delete values[k];
         await updateMaster(query, master, existing.id, values);
         updated++;
       } else {
@@ -250,6 +263,7 @@ route("POST", "/api/m/:master/import", async (c) => {
             values.sellable = ["FG", "SA"].includes(values.category) ? 1 : 0;
             values.purchasable = values.sellable ? 0 : 1;
           }
+          values.sellable ??= 0; values.purchasable ??= 0;
         }
         const created = await insertMaster(query, master, values);
         added.push([created.code, values.name]);
