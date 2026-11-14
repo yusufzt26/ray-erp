@@ -258,6 +258,7 @@ ok(led.rows.filter((r) => /Dispatched/.test(r.kind) && ["DC-00001", "R/26-007"].
 await p.goto(U + "/#/"); await p.waitForSelector(".kpis"); await p.goto(U + "/#/d/quotation/" + (soId - 1) + "/print"); await p.waitForSelector(".inv-page");
 await p.screenshot({ path: join(SHOTS, "quotation_print.png"), fullPage: true });
 ok((await p.textContent(".inv-page")).includes("One Thousand One Hundred and Eighty"), "quotation prints with amount in words");
+ok((await p.textContent(".inv-page")).includes("valid for 30 days") && !(await p.textContent(".inv-page")).includes("A/c. Payee Cheque"), "quotation prints its own terms");
 
 await p.goto(U + "/#/d/purchase_order/new"); await p.waitForSelector("text=New Purchase Order"); await p.waitForSelector("#party_id");
 await p.selectOption("#party_id", "1");

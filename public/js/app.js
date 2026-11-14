@@ -777,7 +777,8 @@ pages.settings = async () => {
       ${ta("company_address", "Address", 2)}
       ${ta("company_tagline", "Tagline under the logo", 2)}
       ${ta("bank_details", "Bank details")}
-      ${ta("invoice_terms", "Terms & conditions")}
+      ${ta("invoice_terms", "Terms & conditions (invoices and sales orders)")}
+      ${ta("quotation_terms", "Terms & conditions on quotations", 4)}
       ${ta("invoice_declaration", "Declaration", 4)}
       <div class="full buttons"><button class="btn primary">💾 Save</button></div>
     </form>

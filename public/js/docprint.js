@@ -51,7 +51,7 @@ export async function docPrint({ api, layout, S }, type, id) {
           <tr><td colspan="2">GST / Tax</td><td class="r">${money(total - sub)}</td></tr>
           <tr class="b"><td colspan="2">Total</td><td class="r">${money(total)}</td></tr>`
           : `<tr class="grand"><td colspan="4"><b>Total quantity</b></td><td class="r"><b>${qty(lines.reduce((t, l) => t + Number(l.qty || 0), 0))}</b></td><td></td></tr>`}
-        <tr class="foot"><td colspan="${priced ? 5 : 3}">${type === "quotation" || type === "customer_po" ? `<b>TERMS &amp; CONDITIONS :</b><br>${nl(s.invoice_terms)}` : type === "grn" ? "<b>Received in good condition.</b><br>Checked by :" : "<b>Receiver's signature &amp; stamp</b>"}</td>
+        <tr class="foot"><td colspan="${priced ? 5 : 3}">${type === "quotation" || type === "customer_po" ? `<b>TERMS &amp; CONDITIONS :</b><br>${nl(type === "quotation" ? s.quotation_terms || s.invoice_terms : s.invoice_terms)}` : type === "grn" ? "<b>Received in good condition.</b><br>Checked by :" : "<b>Receiver's signature &amp; stamp</b>"}</td>
           <td colspan="${priced ? 3 : 3}" class="c sign"><b>For ${h(s.company_name)}</b><div class="gap"></div>Authorised Signatory</td></tr>
       </table></div></div>`);
   fitPages();

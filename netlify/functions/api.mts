@@ -506,7 +506,7 @@ route("PUT", "/api/permissions", async (c) => {
 });
 
 const SETTING_KEYS = ["company_name", "company_gstin", "company_pan", "company_state", "company_gst_wef", "company_address",
-  "company_email", "company_mobile", "company_tagline", "invoice_prefix", "invoice_terms", "bank_details", "invoice_declaration"];
+  "company_email", "company_mobile", "company_tagline", "invoice_prefix", "invoice_terms", "quotation_terms", "bank_details", "invoice_declaration"];
 route("PUT", "/api/settings", async (c) => {
   if (c.user?.role !== "Admin") fail(403, "Only Admin can change company settings.");
   for (const k of SETTING_KEYS) {
