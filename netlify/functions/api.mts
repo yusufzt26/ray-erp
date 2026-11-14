@@ -357,7 +357,8 @@ route("POST", "/api/d/:type/save", async (c) => {
       let pid = num(l.product_id);
       if (!(desc || part || pid) && !qty) continue;
       if (amount === null && qty !== null && rate !== null) amount = Math.round(qty * rate * 100) / 100;
-      if (!pid && l.create && (desc || part)) {
+      if (type === "quotation") pid = null; // a quotation is free text: no item code needed
+      if (!pid && l.create && (desc || part) && type !== "quotation") {
         const cat = (PRODUCT_CATEGORIES as any)[l.category] ? l.category : type === "customer_po" ? "FG" : "RM";
         const values: any = {
           name: desc || part, category: cat, customer_part_no: part || null, hsn: str(l.hsn) || null,
@@ -767,6 +768,15 @@ route("GET", "/api/convert/:id/:target", async (c) => {
     qty: l.pending, rate: l.rate, amount: l.rate !== null ? Math.round(l.pending * l.rate * 100) / 100 : null,
   }));
   if (!lines.length) fail(400, "Everything on this document has already been done.");
+  const flag = td.productFlag === "purchasable" ? "purchasable" : "sellable";
+  for (const l of lines as any[]) {
+    if (l.product_id) continue;
+    const part = str(l.party_part_no).replace(/\s+/g, "").toUpperCase(), desc = str(l.description);
+    const hit = (part && await one(`SELECT id FROM products WHERE active = 1 AND ${flag} = 1 AND (upper(regexp_replace(COALESCE(customer_part_no, ''), '\\s', '', 'g')) = $1
+        OR upper(regexp_replace(COALESCE(drawing_no, ''), '\\s', '', 'g')) = $1) ORDER BY id LIMIT 1`, [part]))
+      || (desc && await one(`SELECT id FROM products WHERE active = 1 AND ${flag} = 1 AND lower(trim(name)) = lower($1) ORDER BY id LIMIT 1`, [desc]));
+    if (hit) l.product_id = hit.id; else l.create_product = true;
+  }
   const sub = lines.reduce((t: number, l: any) => t + (l.amount || 0), 0);
   const ratio = Number(src.subtotal) ? Number(src.total_amount || 0) / Number(src.subtotal) : 1.18;
   const doc: any = {

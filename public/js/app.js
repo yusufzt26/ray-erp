@@ -482,7 +482,7 @@ function lineRow(l, products, flag, type) {
   const defCat = type === "customer_po" ? "FG" : "RM";
   return `<tr>
     <td class="ln"></td>
-    <td><select name="product_id" class="prod ${l.found && l.product_id ? "auto" : ""}"><option value="">— not linked —</option>
+    <td ${type === "quotation" ? "hidden" : ""}><select name="product_id" class="prod ${l.found && l.product_id ? "auto" : ""}"><option value="">— not linked —</option>
       ${products.map((p) => `<option value="${p.id}" ${l.product_id === p.id ? "selected" : ""}>${h(p.code)} · ${h(p.name)}${p[flag] ? "" : ` (not ${flag})`}</option>`).join("")}</select></td>
     <td><input name="party_part_no" value="${h(l.party_part_no)}"></td>
     <td><input name="description" value="${h(l.description)}"></td>
@@ -491,7 +491,7 @@ function lineRow(l, products, flag, type) {
     <td><input name="uom" value="${h(l.uom)}"></td>
     <td><input name="rate" value="${numStr(l.rate)}" inputmode="decimal"></td>
     <td><input name="amount" value="${l.amount === null || l.amount === undefined || l.amount === "" ? "" : Number(l.amount).toFixed(2)}" inputmode="decimal"></td>
-    <td><span class="newbox" ${l.product_id ? "hidden" : ""}><label class="check inline"><input type="checkbox" name="create" ${l.create_product ? "checked" : ""}> create</label>
+    <td ${type === "quotation" ? "hidden" : ""}><span class="newbox" ${l.product_id ? "hidden" : ""}><label class="check inline"><input type="checkbox" name="create" ${l.create_product ? "checked" : ""}> create</label>
       <select name="category" title="Category for the new item code">${Object.keys(PRODUCT_CATEGORIES).map((k) => `<option ${k === defCat ? "selected" : ""}>${k}</option>`).join("")}</select></span></td>
     <td><button type="button" class="rm" title="Remove line">✕</button></td></tr>`;
 }
@@ -559,7 +559,7 @@ pages.docForm = async (type, id, preset = null) => {
         ${srcUrl && !found ? `<a href="${srcUrl}">⬇ Download the original Excel file</a>` : ""}</div>` : ""}
       <div class="card items"><fieldset ${editable ? "" : "disabled"}>
         <h2>Items</h2>
-        <div class="scroll"><table class="lines"><thead><tr><th>#</th><th>Our item</th><th>Part No</th><th>Description</th><th>HSN</th><th>Qty</th><th>UOM</th><th>Rate</th><th>Amount</th><th>New product?</th><th></th></tr></thead>
+        <div class="scroll"><table class="lines"><thead><tr><th>#</th><th ${type === "quotation" ? "hidden" : ""}>Our item</th><th>Part No</th><th>Description</th><th>HSN</th><th>Qty</th><th>UOM</th><th>Rate</th><th>Amount</th><th ${type === "quotation" ? "hidden" : ""}>New product?</th><th></th></tr></thead>
           <tbody id="lines">${lines.map((l) => lineRow(l, products, flag, type)).join("")}</tbody></table></div>
         ${editable ? '<button type="button" class="btn small" id="addline">＋ Add line</button>' : ""}
         <div class="totals">
@@ -651,7 +651,7 @@ pages.docForm = async (type, id, preset = null) => {
       product_id: $("[name=product_id]", r).value, party_part_no: $("[name=party_part_no]", r).value,
       description: $("[name=description]", r).value, hsn: $("[name=hsn]", r).value, qty: $("[name=qty]", r).value,
       uom: $("[name=uom]", r).value, rate: $("[name=rate]", r).value, amount: $("[name=amount]", r).value,
-      create: !$(".newbox", r).hidden && $("[name=create]", r).checked, category: $("[name=category]", r).value,
+      create: type !== "quotation" && !$(".newbox", r).hidden && $("[name=create]", r).checked, category: $("[name=category]", r).value,
     }));
     const btn = e.submitter;
     busy(btn, true, "Saving…");
