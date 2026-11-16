@@ -267,6 +267,9 @@ ok((await p.textContent(".inv-page")).includes("One Thousand One Hundred and Eig
 ok((await p.textContent(".inv-page")).includes("Delivery in : 10 days"), "quotation prints delivery in days");
 ok((await p.textContent(".inv-page")).includes("valid for 15 days") && !(await p.textContent(".inv-page")).includes("A/c. Payee Cheque"), "quotation prints its own terms");
 ok((await p.evaluate(() => document.title)) .startsWith("QTN-00001 - "), "PDF file name is the quotation no and customer");
+await p.goto(U + "/#/d/quotation"); await p.waitForSelector("text=🖨 PDF");
+await p.click("text=🖨 PDF"); await p.waitForSelector(".inv-page");
+ok(p.url().endsWith("/print"), "quotation list opens the PDF print in one click");
 ok((await p.textContent("tr.notes")).includes("Notes :"), "quotation prints its notes");
 
 await p.goto(U + "/#/d/purchase_order/new"); await p.waitForSelector("text=New Purchase Order"); await p.waitForSelector("#party_id");

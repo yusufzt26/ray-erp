@@ -340,7 +340,7 @@ route("GET", "/api/d/:type", async (c) => {
   if (qs) { params.push(`%${qs}%`); sql += ` AND (doc_no ILIKE $${params.length} OR ref_no ILIKE $${params.length} OR party_name ILIKE $${params.length})`; }
   const seg = str(new URL(c.req.url).searchParams.get("segment"));
   if (seg) { params.push(segmentOf(seg)); sql += ` AND segment = $${params.length}`; }
-  return json({ rows: await q(sql + " ORDER BY id DESC", params) });
+  return json({ rows: await q(sql + ((DOC_TYPES as any)[c.params.type]?.own ? " ORDER BY ref_no DESC, id DESC" : " ORDER BY id DESC"), params) });
 });
 
 route("GET", "/api/d/:type/lines", async (c) => {

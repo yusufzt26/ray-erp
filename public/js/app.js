@@ -417,6 +417,7 @@ pages.docList = async (type) => {
   const sp = new URLSearchParams(location.hash.split("?")[1] || "");
   const qs = sp.get("q") || "", seg = sp.get("segment") || "";
   const { rows } = await api("GET", `/api/d/${type}?` + new URLSearchParams({ q: qs, segment: seg }));
+  const withDays = type === "quotation" || type === "purchase_order";
   layout(`
     <div class="head"><h1>${d.title} <small>(${rows.length})</small></h1>
       <div class="actions">
@@ -427,10 +428,12 @@ pages.docList = async (type) => {
     <form class="filters" id="flt"><input name="q" value="${h(qs)}" placeholder="Search ${h(d.noLabel)}, ref or ${d.partyLabel.toLowerCase()}…">
       ${segmentSelect(seg)}<button class="btn">Search</button></form>
     <div class="scroll"><table class="grid">
-      <tr><th>Ref</th><th>${h(d.noLabel)}</th><th>${h(d.dateLabel)}</th><th>${d.partyLabel}</th><th class="num">Total</th><th>Status</th><th>PDF</th></tr>
-      ${rows.map((r) => `<tr class="click" data-href="#/d/${type}/${r.id}"><td><b>${h(r.ref_no)}</b></td><td>${h(r.doc_no)}</td><td>${h(r.doc_date)}</td>
-        <td>${h(r.party_name)}</td><td class="num">${money(r.total_amount)}</td><td><span class="pill">${h(r.status)}</span>${r.segment === "NPD" ? ' <span class="pill npd">NPD</span>' : ""}</td><td>${r.pdf_file ? "📄" : ""}</td></tr>`).join("")
-        || `<tr><td colspan="7" class="muted">No ${d.title.toLowerCase()} yet.</td></tr>`}
+      <tr>${d.own ? `<th>${h(d.noLabel)}</th>` : `<th>Our ref</th><th>${h(d.noLabel)}</th>`}<th>${h(d.dateLabel)}</th><th>${d.partyLabel}</th>
+        ${withDays ? "<th>Delivery</th>" : ""}<th class="num">Total</th><th>Status</th><th>PDF</th></tr>
+      ${rows.map((r) => `<tr class="click" data-href="#/d/${type}/${r.id}">${d.own ? `<td><b>${h(r.ref_no)}</b></td>` : `<td><b>${h(r.ref_no)}</b></td><td>${h(r.doc_no)}</td>`}<td>${h(r.doc_date ? r.doc_date.split("-").reverse().join("/") : "")}</td>
+        <td>${h(r.party_name)}</td>${withDays ? `<td>${r.delivery_days != null ? `${h(r.delivery_days)} days` : ""}</td>` : ""}<td class="num">${money(r.total_amount)}</td><td><span class="pill">${h(r.status)}</span>${r.segment === "NPD" ? ' <span class="pill npd">NPD</span>' : ""}</td>
+        <td class="nowrap">${d.printTitle ? `<a class="btn small" href="#/d/${type}/${r.id}/print" title="Open the print page, then Save as PDF">🖨 PDF</a>` : ""}${r.pdf_file ? ' <span title="Uploaded file attached">📄</span>' : ""}</td></tr>`).join("")
+        || `<tr><td colspan="9" class="muted">No ${d.title.toLowerCase()} yet.</td></tr>`}
     </table></div>`);
   $("#flt").onsubmit = (e) => { e.preventDefault(); location.hash = `#/d/${type}?` + new URLSearchParams(new FormData(e.target)); };
   const exp = async (fmt) => {
@@ -972,6 +975,7 @@ async function routeInner() {
 }
 
 document.addEventListener("click", (e) => {
+  if (e.target.closest("a, button, input, select")) return;
   const tr = e.target.closest("tr[data-href]");
   if (tr) location.hash = tr.dataset.href;
 });
