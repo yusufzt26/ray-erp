@@ -304,3 +304,6 @@ table.bank .det input.qty { width: 100px; margin-left: 4px; }
 #drop progress { width: 100%; margin-top: .5rem; }
 .pdfpane .imgprev { height: 62vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .pdfpane .imgprev img { width: 100%; display: block; }
+.newcat { display: grid; gap: .5rem; background: var(--panel); border: 1px dashed var(--line); margin: 0; }
+.newcat .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+.newcat .row label { flex: 1 1 200px; }

@@ -19,6 +19,7 @@ export const MODULES = {
   users: "Users & Roles",
 };
 
+export const BUILTIN_CATEGORIES = ["FG", "SA", "CP", "RM", "BO", "CN", "PK"];
 export const PRODUCT_CATEGORIES = {
   FG: "Finished Good (pipe / assembly)",
   SA: "Sub-Assembly",
@@ -154,9 +155,16 @@ export function coerce(field, raw) {
   let s = String(raw).trim();
   if (field.key === "gstin" || field.key === "pan") s = s.toUpperCase().replace(/\s/g, "");
   if (field.key === "category") {
-    s = s ? s.toUpperCase().slice(0, 2) : "FG";
+    s = s ? s.toUpperCase().split(/[\s\-–(]/)[0] : "FG";
     if (!PRODUCT_CATEGORIES[s]) throw new Error(`Category '${raw}' is not one of ${Object.keys(PRODUCT_CATEGORIES).join(", ")}`);
   }
   if (field.key === "uom" && s) s = s.toUpperCase();
   return s || null;
+}
+
+/** Add categories created by users (from the database) to the list used everywhere. */
+export function addCategories(rows) {
+  for (const r of rows || []) if (r.code && !BUILTIN_CATEGORIES.includes(r.code)) PRODUCT_CATEGORIES[r.code] = r.name;
+  const f = MASTERS.products.fields.find((x) => x.key === "category");
+  f.options = Object.entries(PRODUCT_CATEGORIES).map(([k, v]) => [k, `${k} - ${v}`]);
 }

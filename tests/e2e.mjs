@@ -32,6 +32,7 @@ await p.click("button[name=save]");
 await p.waitForSelector("text=FG-00001 created");
 ok(true, "product created with FG-00001");
 
+
 // CSV import
 const dir = mkdtempSync(join(tmpdir(), "erp-"));
 writeFileSync(join(dir, "p.csv"), "Code,Product Name,Category,Sellable,Purchasable,Unit (UOM),HSN Code\n,PA12 Tube 8x10 Black,RM,No,Yes,MTR,39173100\n,Quick Connector 8mm,BO,,yes,NOS,\n,,RM,,yes,NOS,\n");
@@ -369,6 +370,20 @@ ok(Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance) === r
   await p.locator("tr", { hasText: "UTR998877" }).locator("[data-undo]").click(); await p.waitForSelector("text=back in To match");
   ok((await getJ("/api/bills/in?party=1")).rows.find((b) => b.id === inv.id).pay_status !== "Paid", "undo removes the payment again");
 }
+
+// new category from the product form
+await p.goto(U + "/#/"); await p.goto(U + "/#/m/products/new"); await p.waitForSelector("[name=name]");
+await p.selectOption("[name=category]", "__new"); await p.waitForSelector("#nc_name");
+await p.fill("#nc_name", "Tooling & Fixtures");
+ok(await p.inputValue("#nc_code") === "TF", "category code suggested from the name");
+await p.screenshot({ path: join(SHOTS, "new_category.png") });
+await p.click("#nc_add"); await p.waitForSelector("text=Category TF - Tooling & Fixtures added");
+ok(await p.inputValue("[name=category]") === "TF", "new category selected");
+await p.fill("[name=name]", "Crimping Fixture 8mm"); await p.click("button[name=save]");
+await p.waitForSelector("text=TF-00001 created");
+ok(true, "product in new category numbered TF-00001");
+await p.goto(U + "/#/m/products/new"); await p.waitForSelector("[name=name]");
+ok(await p.locator("[name=category] option[value=TF]").count() === 1, "new category kept in the list");
 
 // users + roles
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");

@@ -1,7 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
-import { CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, coerce } from "../../public/js/fields.js";
+import { BUILTIN_CATEGORIES, CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, addCategories, coerce } from "../../public/js/fields.js";
 import { clearCookie, makeSessionCookie, readSession } from "../lib/auth.mts";
 import { matchParty, matchProducts } from "../lib/match.mts";
 import { nextCode, one, pdfStore, q, tx } from "../lib/db.mts";
@@ -100,7 +100,8 @@ route("GET", "/api/me", async (c) => {
   const settings = Object.fromEntries((await q("SELECT key, value FROM settings WHERE key <> 'session_secret'")).map((r) => [r.key, r.value]));
   const defaultPw = c.user.username === "admin" && (await bcrypt.compare("admin123", c.user.password_hash));
   const { password_hash, ...user } = c.user;
-  return json({ user, perms: c.perms, settings, defaultPw });
+  const categories = Object.entries(PRODUCT_CATEGORIES).map(([code, name]) => ({ code, name }));
+  return json({ user, perms: c.perms, settings, defaultPw, categories });
 });
 
 route("POST", "/api/password", async (c) => {
@@ -109,6 +110,31 @@ route("POST", "/api/password", async (c) => {
   if (String(c.body.new || "").length < 6) fail(400, "New password must be at least 6 characters.");
   await q("UPDATE users SET password_hash = $1 WHERE id = $2", [await bcrypt.hash(String(c.body.new), 10), c.user!.id]);
   return json({ ok: true });
+});
+
+// ---------------------------------------------------------------- product categories
+let categoriesAt = 0;
+async function loadCategories(force = false) {
+  if (!force && Date.now() - categoriesAt < 5000) return;
+  addCategories(await q("SELECT code, name FROM product_categories ORDER BY code"));
+  categoriesAt = Date.now();
+}
+
+route("GET", "/api/categories", async (c) => {
+  if (!c.user) fail(401, "Please log in.");
+  return json({ rows: Object.entries(PRODUCT_CATEGORIES).map(([code, name]) => ({ code, name, builtin: BUILTIN_CATEGORIES.includes(code) })) });
+});
+
+route("POST", "/api/categories", async (c) => {
+  require(c, "products", "edit");
+  const code = str(c.body.code).toUpperCase().replace(/[^A-Z]/g, "");
+  const name = str(c.body.name).slice(0, 60);
+  if (!/^[A-Z]{2,4}$/.test(code)) fail(400, "The code must be 2 to 4 letters, e.g. TF. It becomes the item code prefix (TF-00001).");
+  if (!name) fail(400, "Please give the category a name.");
+  if ((PRODUCT_CATEGORIES as any)[code]) fail(400, `${code} is already used for "${(PRODUCT_CATEGORIES as any)[code]}".`);
+  await q("INSERT INTO product_categories (code, name) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING", [code, name]);
+  await loadCategories(true);
+  return json({ code, name }, 201);
 });
 
 // ---------------------------------------------------------------- dashboard
@@ -1653,6 +1679,7 @@ export default async (req: Request, _context?: Context) => {
       let body: any = {};
       if (method !== "GET" && (req.headers.get("content-type") || "").includes("application/json")) body = await req.json().catch(() => ({}));
       const params = Object.fromEntries(Object.entries(match.groups || {}).map(([k, v]) => [k, decodeURIComponent(v)]));
+      await loadCategories();
       return await fn({ req, user, perms, params, body });
     }
     return json({ error: "Not found" }, 404);

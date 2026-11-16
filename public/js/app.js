@@ -1,4 +1,4 @@
-import { CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES } from "./fields.js";
+import { CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, addCategories } from "./fields.js";
 import { imageToCanvas, readImage, readPdf, readScannedPdf, readSheet } from "./pdfread.js";
 import { invoicePages } from "./invoice.js";
 import { morePages } from "./more.js";
@@ -220,6 +220,44 @@ function fieldInput(f, v, { locked = false } = {}) {
   return `<label class="${f.type === "textarea" ? "full" : ""}">${h(f.label)}${f.required ? ' <span class="req">*</span>' : ""}${input}${f.help ? `<small>${h(f.help)}</small>` : ""}</label>`;
 }
 
+/** "＋ New category…" at the end of a category list: asks for a name and a 2-4 letter code, saves it, selects it. */
+function newCategoryOption(sel) {
+  if (!sel) return;
+  sel.insertAdjacentHTML("beforeend", '<option value="__new">＋ New category…</option>');
+  const label = sel.closest("label");
+  label.insertAdjacentHTML("afterend", `<div class="card newcat full" hidden>
+    <b>New product category</b>
+    <div class="row"><label>Name<input id="nc_name" placeholder="e.g. Tooling &amp; Fixtures" maxlength="60"></label>
+      <label>Code (item code prefix)<input id="nc_code" placeholder="e.g. TF" maxlength="4" class="upper" style="text-transform:uppercase"></label></div>
+    <small class="muted">Items in it are numbered <span id="nc_eg">TF-00001</span>, TF-00002…</small><div id="nc_err"></div>
+    <div class="buttons"><button type="button" class="btn primary" id="nc_add">Add category</button><button type="button" class="btn" id="nc_cancel">Cancel</button></div></div>`);
+  const box = label.nextElementSibling;
+  let prev = sel.value;
+  sel.addEventListener("change", () => {
+    if (sel.value === "__new") { box.hidden = false; $("#nc_name").focus(); } else { prev = sel.value; box.hidden = true; }
+  });
+  $("#nc_name").oninput = () => {
+    if ($("#nc_code").dataset.typed) return;
+    const words = $("#nc_name").value.toUpperCase().replace(/[^A-Z ]/g, " ").split(/\s+/).filter((w) => w && w !== "AND");
+    $("#nc_code").value = (words.length > 1 ? words.slice(0, 3).map((w) => w[0]).join("") : (words[0] || "").slice(0, 2));
+    $("#nc_eg").textContent = `${$("#nc_code").value || "TF"}-00001`;
+  };
+  $("#nc_code").oninput = () => { $("#nc_code").dataset.typed = "1"; $("#nc_eg").textContent = `${$("#nc_code").value.toUpperCase() || "TF"}-00001`; };
+  box.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("#nc_add").click(); } });
+  $("#nc_cancel").onclick = () => { sel.value = prev; box.hidden = true; };
+  $("#nc_add").onclick = async (e) => {
+    busy(e.target, true, "Adding…");
+    try {
+      const r = await api("POST", "/api/categories", { code: $("#nc_code").value, name: $("#nc_name").value });
+      addCategories([r]);
+      sel.querySelector('[value="__new"]').insertAdjacentHTML("beforebegin", `<option value="${h(r.code)}">${h(r.code)} - ${h(r.name)}</option>`);
+      sel.value = prev = r.code; box.hidden = true;
+      label.insertAdjacentHTML("beforeend", `<small class="ok nc_ok">✓ Category ${h(r.code)} - ${h(r.name)} added. It stays in the list for all products.</small>`);
+    } catch (err) { $("#nc_err").innerHTML = errorBox([err.message]); }
+    busy(e.target, false);
+  };
+}
+
 pages.masterForm = async (master, id) => {
   const m = MASTERS[master];
   const isNew = id === "new";
@@ -264,6 +302,7 @@ pages.masterForm = async (master, id) => {
       scrollTo(0, 0);
     }
   };
+  if (master === "products" && !row && editable) newCategoryOption($("#f [name=category]"));
   if (master === "products" && row && ["FG", "SA"].includes(row.category)) await more.bomCard(row, editable);
   if ($("#del")) $("#del").onclick = async () => {
     if (!confirm(`Delete ${row.code}?`)) return;
@@ -813,6 +852,7 @@ const inv = invoicePages({ api, layout, can, flash, $, $$, errorBox, busy, get S
 async function loadMe() {
   const me = await api("GET", "/api/me");
   S = { user: me.user, perms: me.perms || {}, settings: me.settings || S.settings, defaultPw: me.defaultPw };
+  addCategories(me.categories);
 }
 
 // A slow page that finishes after a newer one would paint over it; if that happens, draw the current page again.
