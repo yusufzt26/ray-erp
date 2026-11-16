@@ -445,7 +445,7 @@ route("POST", "/api/d/:type/save", async (c) => {
     const header = {
       doc_no: str(b.doc_no), doc_date: isoDate(b.doc_date), party_id: partyId, party_name: partyName, party_gstin: partyGstin,
       delivery_days: deliveryDays(b.delivery_days),
-      terms: type === "quotation" ? str(b.terms).slice(0, 4000) || null : null,
+      terms: type === "quotation" || type === "purchase_order" ? str(b.terms).slice(0, 4000) || null : null,
       delivery_date: deliveryDays(b.delivery_days) !== null && type !== "quotation"
         ? addDays(isoDate(b.doc_date) || todayIso(), deliveryDays(b.delivery_days)!) : isoDate(b.delivery_date),
       subtotal, tax_amount: total ? Math.round((total - subtotal) * 100) / 100 : null,
@@ -468,6 +468,7 @@ route("POST", "/api/d/:type/save", async (c) => {
         if (typed && typed.toUpperCase() !== String(existing.ref_no).toUpperCase()) refNo = await ownNumber(query, type, d.prefix, typed, did);
         header.doc_no = refNo;
         (header as any).ref_no = refNo;
+        if (!header.doc_date) header.doc_date = todayIso();
       }
       const keys = Object.keys(header); // after the number fields above were added
       await query(`UPDATE documents SET ${keys.map((k, i) => `${k} = $${i + 1}`).join(", ")} WHERE id = $${keys.length + 1}`,
@@ -586,7 +587,7 @@ route("PUT", "/api/permissions", async (c) => {
 });
 
 const SETTING_KEYS = ["company_name", "company_gstin", "company_pan", "company_state", "company_gst_wef", "company_address",
-  "company_email", "company_mobile", "company_tagline", "invoice_prefix", "invoice_terms", "quotation_terms", "bank_details", "invoice_declaration"];
+  "company_email", "company_mobile", "company_tagline", "invoice_prefix", "invoice_terms", "quotation_terms", "po_terms", "bank_details", "invoice_declaration"];
 route("PUT", "/api/settings", async (c) => {
   if (c.user?.role !== "Admin") fail(403, "Only Admin can change company settings.");
   for (const k of SETTING_KEYS) {

@@ -279,8 +279,19 @@ await p.selectOption("#lines tr:first-child [name=product_id]", "2");
 await p.fill("#lines tr:first-child [name=qty]", "500"); await p.fill("#lines tr:first-child [name=rate]", "100");
 await p.fill("[name=delivery_days]", "20");
 ok((await p.textContent("#dd_by")).startsWith("By "), "PO shows the date the days come to");
+ok((await p.inputValue("[name=terms]")).includes("test certificate"), "PO form shows the default PO terms to edit");
+await p.fill("[name=terms]", "1. Supply with PPAP documents."); await p.fill("[name=notes]", "Urgent for Welspun");
 await p.click("button:has-text('Save Purchase Order')"); await p.waitForSelector("text=PO-00001 saved");
 ok(await p.inputValue("[name=delivery_days]") === "20" && (await p.textContent("#dd_by")).startsWith("By "), "PO keeps its delivery days");
+{
+  const poUrl = p.url();
+  await p.goto(poUrl + "/print"); await p.waitForSelector(".inv-page");
+  const t = await p.textContent(".inv-page");
+  ok(t.includes("Supply with PPAP documents") && t.includes("Urgent for Welspun") && t.includes("Delivery in : 20 days"), "PO prints its own terms, notes and delivery days");
+  ok((await p.title()).startsWith("PO-00001 - "), "PO PDF file name is the PO no and vendor");
+  await p.goto(poUrl);
+  await p.waitForSelector("text=Purchase Order");
+}
 const poId = Number(p.url().split("/").pop());
 const rmBefore = Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance);
 await p.click("text=Make Goods Receipt"); await p.waitForSelector("text=only the quantity still pending");
@@ -436,6 +447,14 @@ ok((await p.textContent(".suggest")).includes("SAC-FL-0812"), "part no suggestio
   const c3 = await qtn(""); await call("DELETE", "/api/d/quotation/" + b2.id);
   const moved = await call("POST", "/api/d/quotation/save", { id: c3.id, party_name: "Number Test Co", doc_no: b2.ref_no, delivery_days: "15", segment: "NPD", lines: [{ description: "Test part", qty: 1, rate: 10, amount: 10 }] });
   ok(moved.status === 200 && moved.ref_no === b2.ref_no, "saved quotation renumbered to a deleted number " + JSON.stringify(moved));
+  // the same for purchase orders
+  const po = (doc_no, id) => call("POST", "/api/d/purchase_order/save", { id, party_name: "Number Test Vendor", doc_no, delivery_days: "7", lines: [{ description: "Test RM", qty: 1, rate: 10, amount: 10 }] });
+  const pa = await po(""), pb = await po("");
+  await call("DELETE", "/api/d/purchase_order/" + pa.id);
+  ok((await getJ("/api/d/purchase_order/options")).free_refs.includes(pa.ref_no), "deleted PO number offered as free");
+  const pm = await po(pa.ref_no, pb.id);
+  ok(pm.status === 200 && pm.ref_no === pa.ref_no, "saved PO renumbered to a deleted number " + JSON.stringify(pm));
+  ok((await po(pa.ref_no)).status === 400, "PO number already used is refused");
 }
 
 // users + roles

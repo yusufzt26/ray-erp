@@ -624,8 +624,8 @@ pages.docForm = async (type, id, preset = null) => {
           <label>Document total (incl. tax)<input name="total_amount" id="total_amount" inputmode="decimal" value="${doc.total_amount === null || doc.total_amount === undefined ? "" : Number(doc.total_amount).toFixed(2)}" class="${cls(found?.total)}"></label>
           <div>Tax / other: <b id="taxdiff">0.00</b></div>
         </div>
-        ${type === "quotation" ? `<label class="full">Terms &amp; conditions <small>(printed on this quotation; the default comes from Company Settings)</small>
-          <textarea name="terms" rows="4">${h(doc.terms || S.settings.quotation_terms || S.settings.invoice_terms || "")}</textarea></label>` : ""}
+        ${type === "quotation" || type === "purchase_order" ? `<label class="full">Terms &amp; conditions <small>(printed on this ${type === "quotation" ? "quotation" : "PO"}; the default comes from Company Settings)</small>
+          <textarea name="terms" rows="4">${h(doc.terms || (type === "quotation" ? S.settings.quotation_terms || S.settings.invoice_terms : S.settings.po_terms) || "")}</textarea></label>` : ""}
         <label class="full">Notes <textarea name="notes" rows="2">${h(doc.notes)}</textarea></label>
       </fieldset>
       ${editable ? `<div class="buttons"><button class="btn primary">💾 Save ${d.singular}</button>
@@ -863,6 +863,7 @@ pages.settings = async () => {
       ${ta("bank_details", "Bank details")}
       ${ta("invoice_terms", "Terms & conditions (invoices and sales orders)")}
       ${ta("quotation_terms", "Terms & conditions on quotations", 4)}
+      ${ta("po_terms", "Terms & conditions on purchase orders", 4)}
       ${ta("invoice_declaration", "Declaration", 4)}
       <div class="full buttons"><button class="btn primary">💾 Save</button></div>
     </form>
