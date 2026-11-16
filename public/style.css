@@ -314,3 +314,6 @@ table.bank .det input.qty { width: 100px; margin-left: 4px; }
 .suggest .sg small { color: var(--muted); white-space: nowrap; }
 .suggest .sg.on, .suggest .sg:hover { background: var(--bg); }
 .suggest .sgpart { font-family: ui-monospace, Consolas, monospace; font-size: .85em; }
+.days { display: flex; align-items: center; gap: 8px; }
+.days input { width: 7ch; text-align: right; }
+.days > span { color: var(--muted); }

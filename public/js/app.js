@@ -598,9 +598,8 @@ pages.docForm = async (type, id, preset = null) => {
           ${d.own && !doc.id ? `<small>Will be <b>${h(next_ref)}</b>, given automatically when you save</small>` : !d.own && !doc.id ? `<small>Our ref will be <b>${h(next_ref)}</b></small>` : ""}</label>
         <label>${h(d.dateLabel)}<input name="doc_date" type="date" value="${h(doc.doc_date)}" class="${cls(found?.doc_date)}"></label>
         ${type === "customer_po" ? `<label>Delivery date<input name="delivery_date" type="date" value="${h(doc.delivery_date)}" class="${found && doc.delivery_date ? "auto" : ""}"></label>` : ""}
-        ${type === "quotation" || type === "purchase_order" ? `<label>${type === "quotation" ? "Delivery (days from PO)" : "Delivery within (days)"}
-          <input name="delivery_days" type="number" min="0" max="999" list="daylist" placeholder="e.g. 10" value="${h(doc.delivery_days ?? "")}">
-          <datalist id="daylist">${[2, 7, 10, 15, 21, 30, 45, 60].map((n) => `<option value="${n}">${n} days</option>`).join("")}</datalist>
+        ${type === "quotation" || type === "purchase_order" ? `<label>Delivery in
+          <span class="days"><input name="delivery_days" type="text" inputmode="numeric" maxlength="3" autocomplete="off" value="${h(doc.delivery_days ?? "")}"><span>days</span></span>
           <small id="dd_by">${type === "purchase_order" && doc.delivery_date ? `By ${doc.delivery_date.split("-").reverse().join("/")}` : ""}</small></label>` : ""}
         <label>Status<select name="status">${d.statuses.map((s) => `<option ${doc.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
         <label>Type<select name="segment">${["Regular", "NPD"].map((s) => `<option value="${s}" ${(doc.segment || "Regular") === s ? "selected" : ""}>${s === "NPD" ? "NPD (new product development)" : "Regular production"}</option>`).join("")}</select></label>
@@ -704,6 +703,7 @@ pages.docForm = async (type, id, preset = null) => {
     $("#create_party_box").hidden = !!e.target.value;
     if (e.target.value) { $("#party_name").value = o.dataset.name; if (o.dataset.gstin) $("#party_gstin").value = o.dataset.gstin; }
   };
+  if ($("[name=delivery_days]")) $("[name=delivery_days]").addEventListener("input", (e) => { e.target.value = e.target.value.replace(/\D/g, ""); });
   if (type === "purchase_order" && $("[name=delivery_days]")) {
     const showBy = () => {
       const n = parseInt($("[name=delivery_days]").value, 10), base = $("[name=doc_date]").value || new Date().toISOString().slice(0, 10);

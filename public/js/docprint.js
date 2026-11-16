@@ -7,9 +7,8 @@ const h = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<"
 const nl = (v) => h(v).replace(/\n/g, "<br>");
 const dmy = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
 const deliveryLine = (type, doc) => {
-  const n = doc.delivery_days, days = `${n} day${n === 1 ? "" : "s"}`;
-  if (n !== null && n !== undefined && type === "quotation") return `<b>Delivery :</b> within ${days} from receipt of PO<br>`;
-  if (n !== null && n !== undefined) return `<b>Delivery :</b> within ${days}${doc.delivery_date ? `, by ${dmy(doc.delivery_date)}` : ""}<br>`;
+  const n = doc.delivery_days;
+  if (n !== null && n !== undefined) return `<b>Delivery in :</b> ${n} day${n === 1 ? "" : "s"}<br>`;
   return doc.delivery_date ? `<b>Delivery by :</b> ${dmy(doc.delivery_date)}<br>` : "";
 };
 const money = (n) => (n === null || n === undefined || n === "" ? "" : Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
