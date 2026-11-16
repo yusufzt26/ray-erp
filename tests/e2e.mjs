@@ -404,11 +404,13 @@ ok(await p.locator("[name=category] option[value=TF]").count() === 1, "new categ
 
 // type-ahead on quotation lines
 await p.goto(U + "/#/"); await p.goto(U + "/#/d/quotation/new"); await p.waitForSelector("text=New Quotation"); await p.waitForSelector("#party_id");
+await p.waitForTimeout(1500); // let the dashboard request started by "#/" finish, so the form is not redrawn while typing
 await p.click("#lines tr:first-child [name=description]"); await p.keyboard.type("nfl");
 await p.waitForSelector(".suggest:not([hidden]) .sg");
 ok((await p.textContent(".suggest")).includes("Nylon Fuel Line Assy"), "short form 'nfl' suggests Nylon Fuel Line Assy");
 await p.screenshot({ path: join(SHOTS, "qtn_suggest.png") });
 await p.keyboard.press("ArrowDown"); await p.keyboard.press("Enter");
+await p.waitForFunction(() => document.querySelector("#lines tr:first-child [name=party_part_no]").value !== "", null, { timeout: 5000 }).catch(() => {});
 ok(await p.inputValue("#lines tr:first-child [name=party_part_no]") === "SAC-FL-0812", "picking a suggestion fills part no");
 await p.fill("#lines tr:first-child [name=party_part_no]", ""); await p.fill("#lines tr:first-child [name=description]", "");
 await p.click("#lines tr:first-child [name=description]"); await p.keyboard.type("new des");
@@ -430,6 +432,10 @@ ok((await p.textContent(".suggest")).includes("SAC-FL-0812"), "part no suggestio
   ok(reused.ref_no === a.ref_no, "typed free number is used as the quotation number");
   ok((await qtn(b2.ref_no)).status === 400, "number already used is refused");
   ok((await qtn("QTN-09999")).status === 400, "skipping ahead is refused");
+  // an existing quotation changed to a deleted number keeps its lines and gets that number
+  const c3 = await qtn(""); await call("DELETE", "/api/d/quotation/" + b2.id);
+  const moved = await call("POST", "/api/d/quotation/save", { id: c3.id, party_name: "Number Test Co", doc_no: b2.ref_no, delivery_days: "15", segment: "NPD", lines: [{ description: "Test part", qty: 1, rate: 10, amount: 10 }] });
+  ok(moved.status === 200 && moved.ref_no === b2.ref_no, "saved quotation renumbered to a deleted number " + JSON.stringify(moved));
 }
 
 // users + roles

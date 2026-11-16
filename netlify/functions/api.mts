@@ -469,6 +469,7 @@ route("POST", "/api/d/:type/save", async (c) => {
         header.doc_no = refNo;
         (header as any).ref_no = refNo;
       }
+      const keys = Object.keys(header); // after the number fields above were added
       await query(`UPDATE documents SET ${keys.map((k, i) => `${k} = $${i + 1}`).join(", ")} WHERE id = $${keys.length + 1}`,
         [...Object.values(header), did]);
       await query("DELETE FROM document_lines WHERE document_id = $1", [did]);

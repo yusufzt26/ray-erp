@@ -44,6 +44,7 @@ export function attachSuggest(tbody, { products = [], recent = [], rateKey, onPi
     options.push({ part: r.party_part_no, name: r.description, hsn: r.hsn, uom: r.uom, rate: r.rate, earlier: true });
   }
 
+  document.querySelectorAll(".suggest").forEach((b) => b.remove()); // one list at a time, even if the page was drawn twice
   const box = document.createElement("div");
   box.className = "suggest";
   box.hidden = true;
