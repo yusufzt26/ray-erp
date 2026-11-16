@@ -216,6 +216,8 @@ await p.fill("#lines tr:first-child [name=qty]", "100"); await p.fill("#lines tr
 await p.fill("[name=total_amount]", "1180");
 await p.selectOption("[name=segment]", "NPD");
 await p.fill("[name=delivery_days]", "10");
+ok((await p.inputValue("[name=terms]")).includes("valid for 30 days"), "quotation form shows the default terms to edit");
+await p.fill("[name=terms]", (await p.inputValue("[name=terms]")).replace("valid for 30 days", "valid for 15 days"));
 await p.click("button:has-text('Save Quotation')");
 await p.waitForSelector("text=QTN-00001 saved");
 ok((await getJ("/api/m/products?show=all")).rows.length === prodCount, "quotation saved with automatic number, no item created");
@@ -263,7 +265,8 @@ await p.goto(U + "/#/"); await p.waitForSelector(".kpis"); await p.goto(U + "/#/
 await p.screenshot({ path: join(SHOTS, "quotation_print.png"), fullPage: true });
 ok((await p.textContent(".inv-page")).includes("One Thousand One Hundred and Eighty"), "quotation prints with amount in words");
 ok((await p.textContent(".inv-page")).includes("Delivery in : 10 days"), "quotation prints delivery in days");
-ok((await p.textContent(".inv-page")).includes("valid for 30 days") && !(await p.textContent(".inv-page")).includes("A/c. Payee Cheque"), "quotation prints its own terms");
+ok((await p.textContent(".inv-page")).includes("valid for 15 days") && !(await p.textContent(".inv-page")).includes("A/c. Payee Cheque"), "quotation prints its own terms");
+ok((await p.evaluate(() => document.title)) .startsWith("QTN-00001 - "), "PDF file name is the quotation no and customer");
 
 await p.goto(U + "/#/d/purchase_order/new"); await p.waitForSelector("text=New Purchase Order"); await p.waitForSelector("#party_id");
 ok((await p.textContent("h1")).includes("PO-00001") && (await p.getAttribute("[name=doc_no]", "placeholder")) === "PO-00001", "new PO shows the number it will get");

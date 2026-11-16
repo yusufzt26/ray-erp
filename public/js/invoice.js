@@ -51,7 +51,7 @@ function billToFor(c) {
 }
 
 import { linksPanel } from "./links.js";
-import { fitPages } from "./printfit.js";
+import { fitPages, pdfName } from "./printfit.js";
 import { payStatus } from "./links.js";
 
 // ---------------------------------------------------------------- pages
@@ -384,7 +384,7 @@ export function invoicePages(ctx) {
           ${can("sales_invoice", "edit") ? `<a class="btn" href="#/invoices/${id}">✏️ Edit</a>` : ""}
           <a class="btn" href="#/invoices">← Back</a></div></div>
       <p class="muted noprint">Tip: in the print window choose "Save as PDF" to email it. Paper size A4.</p>
-      <div class="print-area">${mode === "labels" ? labelsHtml(inv, lines, s) : copies.map((c) => invoiceHtml(inv, lines, s, c)).join("")}</div>`);
+      <div class="print-area" data-pdf-name="${h(pdfName((mode === "labels" ? "Labels " : "") + inv.inv_no, String(inv.bill_to || "").split("\n")[0]))}">${mode === "labels" ? labelsHtml(inv, lines, s) : copies.map((c) => invoiceHtml(inv, lines, s, c)).join("")}</div>`);
     fitPages();
   }
 

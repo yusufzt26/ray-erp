@@ -620,6 +620,8 @@ pages.docForm = async (type, id, preset = null) => {
           <label>Document total (incl. tax)<input name="total_amount" id="total_amount" inputmode="decimal" value="${doc.total_amount === null || doc.total_amount === undefined ? "" : Number(doc.total_amount).toFixed(2)}" class="${cls(found?.total)}"></label>
           <div>Tax / other: <b id="taxdiff">0.00</b></div>
         </div>
+        ${type === "quotation" ? `<label class="full">Terms &amp; conditions <small>(printed on this quotation; the default comes from Company Settings)</small>
+          <textarea name="terms" rows="4">${h(doc.terms || S.settings.quotation_terms || S.settings.invoice_terms || "")}</textarea></label>` : ""}
         <label class="full">Notes <textarea name="notes" rows="2">${h(doc.notes)}</textarea></label>
       </fieldset>
       ${editable ? `<div class="buttons"><button class="btn primary">💾 Save ${d.singular}</button>
@@ -720,7 +722,7 @@ pages.docForm = async (type, id, preset = null) => {
   $("#f").onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const body = Object.fromEntries(["party_id", "party_name", "party_gstin", "doc_no", "doc_date", "delivery_date", "delivery_days", "status", "segment", "total_amount", "notes"].map((k) => [k, fd.get(k)]));
+    const body = Object.fromEntries(["party_id", "party_name", "party_gstin", "doc_no", "doc_date", "delivery_date", "delivery_days", "terms", "status", "segment", "total_amount", "notes"].map((k) => [k, fd.get(k)]));
     body.create_party = fd.has("create_party");
     body.parent_id = doc.parent_id || null;
     body.id = doc.id || null;
@@ -898,7 +900,8 @@ async function loadMe() {
 let routeSeq = 0, doneSeq = 0;
 async function route() {
   const seq = ++routeSeq;
-  try { await routeInner(); } finally { if (seq < doneSeq) { flashes = shownFlashes.concat(flashes); route(); } else doneSeq = seq; }
+  try { await routeInner(); } finally {
+    document.title = document.querySelector(".print-area")?.dataset.pdfName || "Ray Precicomp ERP"; if (seq < doneSeq) { flashes = shownFlashes.concat(flashes); route(); } else doneSeq = seq; }
 }
 
 async function routeInner() {

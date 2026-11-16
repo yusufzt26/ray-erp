@@ -313,7 +313,7 @@ route("POST", "/api/m/:master/import", async (c) => {
 /** "10", "10 days", " 30 " -> 10; blank -> null. */
 const deliveryDays = (v: unknown) => { const m = String(v ?? "").match(/\d+/); return m ? Math.min(Number(m[0]), 999) : null; };
 const addDays = (iso: string, n: number) => { const t = new Date(iso + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
-const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, delivery_days, subtotal, tax_amount, total_amount, notes, pdf_file, status, eway, segment, created_at";
+const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, delivery_days, terms, subtotal, tax_amount, total_amount, notes, pdf_file, status, eway, segment, created_at";
 
 route("GET", "/api/d/:type", async (c) => {
   docTypeOf(c.params.type);
@@ -425,6 +425,7 @@ route("POST", "/api/d/:type/save", async (c) => {
     const header = {
       doc_no: str(b.doc_no), doc_date: isoDate(b.doc_date), party_id: partyId, party_name: partyName, party_gstin: partyGstin,
       delivery_days: deliveryDays(b.delivery_days),
+      terms: type === "quotation" ? str(b.terms).slice(0, 4000) || null : null,
       delivery_date: deliveryDays(b.delivery_days) !== null && type !== "quotation"
         ? addDays(isoDate(b.doc_date) || todayIso(), deliveryDays(b.delivery_days)!) : isoDate(b.delivery_date),
       subtotal, tax_amount: total ? Math.round((total - subtotal) * 100) / 100 : null,

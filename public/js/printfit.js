@@ -41,3 +41,6 @@ export async function fitPages(root = document) {
   await Promise.all(imgs.map((img) => (img.complete ? null : new Promise((r) => { img.onload = img.onerror = r; }))));
   root.querySelectorAll(".inv-page").forEach(fitOne);
 }
+
+/** "QTN-00002 - Sachin Auto Components": the file name the browser offers for "Save as PDF" (taken from the page title). */
+export const pdfName = (no, party) => [no, party].filter(Boolean).join(" - ").replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").trim().slice(0, 120);

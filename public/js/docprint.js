@@ -1,7 +1,7 @@
 // A4 print for quotations, sales orders, delivery challans, purchase orders and GRNs.
 import { DOC_TYPES } from "./fields.js";
 import { amountInWords } from "./invoice.js";
-import { fitPages } from "./printfit.js";
+import { fitPages, pdfName } from "./printfit.js";
 
 const h = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const nl = (v) => h(v).replace(/\n/g, "<br>");
@@ -32,7 +32,7 @@ export async function docPrint({ api, layout, S }, type, id) {
       <div class="actions"><button class="btn primary" onclick="window.print()">🖨 Print / Save PDF</button>
         <a class="btn" href="#/d/${type}/${id}">← Back</a></div></div>
     <p class="muted noprint">Tip: in the print window choose "Save as PDF" to email it. Paper size A4.</p>
-    <div class="print-area"><div class="inv-page">
+    <div class="print-area" data-pdf-name="${h(pdfName(doc.ref_no, party?.name || doc.party_name))}"><div class="inv-page">
       <table class="inv">
         <colgroup>${priced ? '<col style="width:5%"><col style="width:16%"><col style="width:33%"><col style="width:10%"><col style="width:9%"><col style="width:7%"><col style="width:9%"><col style="width:11%">'
           : '<col style="width:6%"><col style="width:20%"><col style="width:44%"><col style="width:12%"><col style="width:10%"><col style="width:8%">'}</colgroup>
@@ -56,7 +56,7 @@ export async function docPrint({ api, layout, S }, type, id) {
           <tr><td colspan="2">GST / Tax</td><td class="r">${money(total - sub)}</td></tr>
           <tr class="b"><td colspan="2">Total</td><td class="r">${money(total)}</td></tr>`
           : `<tr class="grand"><td colspan="4"><b>Total quantity</b></td><td class="r"><b>${qty(lines.reduce((t, l) => t + Number(l.qty || 0), 0))}</b></td><td></td></tr>`}
-        <tr class="foot"><td colspan="${priced ? 5 : 3}">${type === "quotation" || type === "customer_po" ? `<b>TERMS &amp; CONDITIONS :</b><br>${nl(type === "quotation" ? s.quotation_terms || s.invoice_terms : s.invoice_terms)}` : type === "grn" ? "<b>Received in good condition.</b><br>Checked by :" : "<b>Receiver's signature &amp; stamp</b>"}</td>
+        <tr class="foot"><td colspan="${priced ? 5 : 3}">${type === "quotation" || type === "customer_po" ? `<b>TERMS &amp; CONDITIONS :</b><br>${nl(type === "quotation" ? doc.terms || s.quotation_terms || s.invoice_terms : s.invoice_terms)}` : type === "grn" ? "<b>Received in good condition.</b><br>Checked by :" : "<b>Receiver's signature &amp; stamp</b>"}</td>
           <td colspan="${priced ? 3 : 3}" class="c sign"><b>For ${h(s.company_name)}</b><div class="gap"></div>Authorised Signatory</td></tr>
       </table></div></div>`);
   fitPages();
