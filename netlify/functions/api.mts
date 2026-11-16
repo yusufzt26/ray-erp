@@ -310,6 +310,22 @@ route("POST", "/api/m/:master/import", async (c) => {
 });
 
 // ---------------------------------------------------------------- documents
+/**
+ * A number typed on one of our own documents (quotation, challan, PO, GRN). Only a free number is taken:
+ * one left by a deleted document, or the next number. Returns e.g. "QTN-00002".
+ */
+async function ownNumber(query: any, type: string, prefix: string, typed: string, exceptId: number) {
+  const m = typed.match(/(\d+)\s*$/);
+  const n = m ? Number(m[1]) : 0;
+  const next = Number((await query("SELECT value FROM counters WHERE name = $1", [`doc_${type}`]))[0]?.value || 0) + 1;
+  const want = `${prefix}-${String(n).padStart(5, "0")}`;
+  if (!n || n > next) fail(400, `${typed} can't be used. Use the next number ${prefix}-${String(next).padStart(5, "0")}, or the number of a deleted one.`);
+  const used = (await query("SELECT ref_no FROM documents WHERE doc_type = $1 AND (UPPER(ref_no) = $2 OR UPPER(doc_no) = $2) AND id <> $3 LIMIT 1", [type, want, exceptId]))[0];
+  if (used) fail(400, `${want} is already used. Leave the box empty to get the next number.`);
+  if (n === next) return nextCode(query, `doc_${type}`, prefix);
+  return want;
+}
+
 /** "10", "10 days", " 30 " -> 10; blank -> null. */
 const deliveryDays = (v: unknown) => { const m = String(v ?? "").match(/\d+/); return m ? Math.min(Number(m[0]), 999) : null; };
 const addDays = (iso: string, n: number) => { const t = new Date(iso + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
@@ -352,7 +368,11 @@ route("GET", "/api/d/:type/options", async (c) => {
       ORDER BY LOWER(COALESCE(l.description, '')), LOWER(COALESCE(l.party_part_no, '')), d.id DESC) t ORDER BY doc_id DESC LIMIT 1000`, [sameSide]);
   const counter = await one("SELECT value FROM counters WHERE name = $1", [`doc_${c.params.type}`]);
   const next_ref = `${(d as any).prefix}-${String(Number(counter?.value || 0) + 1).padStart(5, "0")}`;
-  return json({ parties, products, recent, next_ref });
+  // Numbers left free by deleted documents (newest first), which can be typed in instead of the next number.
+  const free_refs = (d as any).own && Number(counter?.value) ? (await q(`SELECT $2 || '-' || LPAD(n::text, 5, '0') AS ref FROM generate_series(1, $3::int) AS n
+    WHERE NOT EXISTS (SELECT 1 FROM documents WHERE doc_type = $1 AND UPPER(ref_no) = $2 || '-' || LPAD(n::text, 5, '0')) ORDER BY n DESC LIMIT 30`,
+    [c.params.type, (d as any).prefix, Number(counter.value)])).map((r: any) => r.ref) : [];
+  return json({ parties, products, recent, next_ref, free_refs });
 });
 
 route("GET", "/api/d/:type/:id", async (c) => {
@@ -443,12 +463,19 @@ route("POST", "/api/d/:type/save", async (c) => {
       const existing = (await query("SELECT ref_no FROM documents WHERE id = $1 AND doc_type = $2", [did, type]))[0];
       if (!existing) fail(404, "Not found");
       refNo = existing.ref_no;
+      if (d.own) {
+        const typed = str(b.doc_no);
+        if (typed && typed.toUpperCase() !== String(existing.ref_no).toUpperCase()) refNo = await ownNumber(query, type, d.prefix, typed, did);
+        header.doc_no = refNo;
+        (header as any).ref_no = refNo;
+      }
       await query(`UPDATE documents SET ${keys.map((k, i) => `${k} = $${i + 1}`).join(", ")} WHERE id = $${keys.length + 1}`,
         [...Object.values(header), did]);
       await query("DELETE FROM document_lines WHERE document_id = $1", [did]);
     } else {
-      refNo = await nextCode(query, `doc_${type}`, d.prefix);
-      if (!header.doc_no) header.doc_no = refNo;
+      refNo = d.own && str(b.doc_no) ? await ownNumber(query, type, d.prefix, str(b.doc_no), 0) : await nextCode(query, `doc_${type}`, d.prefix);
+      if (!header.doc_no || d.own) header.doc_no = refNo;
+      if (d.own && !header.doc_date) header.doc_date = todayIso(); // our own document: dated today unless a date is given
       const all: any = { ...header, doc_type: type, ref_no: refNo, pdf_file: pdfFile || null, created_by: c.user!.id };
       const ks = Object.keys(all);
       id = (await query(`INSERT INTO documents (${ks.join(", ")}) VALUES (${ks.map((_, i) => `$${i + 1}`).join(", ")}) RETURNING id`,

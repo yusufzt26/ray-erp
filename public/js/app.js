@@ -548,7 +548,7 @@ function lineRow(l, products, flag, type) {
 pages.docForm = async (type, id, preset = null) => {
   const d = DOC_TYPES[type];
   if (!id && !can(type, "edit")) return pages.forbidden();
-  const [{ parties, products, recent, next_ref }, existing] = await Promise.all([
+  const [{ parties, products, recent, next_ref, free_refs = [] }, existing] = await Promise.all([
     api("GET", `/api/d/${type}/options`),
     id ? api("GET", `/api/d/${type}/${id}`) : Promise.resolve(null),
   ]);
@@ -594,8 +594,9 @@ pages.docForm = async (type, id, preset = null) => {
           <input name="party_gstin" id="party_gstin" maxlength="15" value="${h(doc.party_gstin)}" class="upper ${found && doc.party_gstin ? "auto" : ""}">
           ${found && found.gstins.length > 1 ? `<small>GSTINs in file: ${found.gstins.map(h).join(", ")}</small>` : ""}</label>
         <label class="check" id="create_party_box" ${doc.party_id ? "hidden" : ""}><input type="checkbox" name="create_party" ${found && !found.party ? "checked" : ""}> Add as new ${d.partyLabel.toLowerCase()} in master</label>
-        <label>${h(d.noLabel)} ${d.own ? "" : '<span class="req">*</span>'}<input name="doc_no" ${d.own ? `placeholder="${doc.id ? "" : h(next_ref)}"` : "required"} value="${h(doc.doc_no)}" class="${cls(found?.doc_no)}">
-          ${d.own && !doc.id ? `<small>Will be <b>${h(next_ref)}</b>, given automatically when you save</small>` : !d.own && !doc.id ? `<small>Our ref will be <b>${h(next_ref)}</b></small>` : ""}</label>
+        <label>${h(d.noLabel)} ${d.own ? "" : '<span class="req">*</span>'}<input name="doc_no" ${d.own ? `placeholder="${doc.id ? "" : h(next_ref)}" list="freenos" autocomplete="off"` : "required"} value="${h(doc.doc_no)}" class="${cls(found?.doc_no)}">
+          ${d.own ? `<datalist id="freenos">${[next_ref, ...free_refs].map((r) => `<option value="${h(r)}">${r === next_ref ? "next number" : "free (deleted)"}</option>`).join("")}</datalist>` : ""}
+          ${d.own && !doc.id ? `<small>Will be <b>${h(next_ref)}</b> when you save. ${free_refs.length ? `Or type a free number from a deleted one: ${free_refs.slice(0, 5).map(h).join(", ")}${free_refs.length > 5 ? "…" : ""}` : ""}</small>` : !d.own && !doc.id ? `<small>Our ref will be <b>${h(next_ref)}</b></small>` : ""}</label>
         <label>${h(d.dateLabel)}<input name="doc_date" type="date" value="${h(doc.doc_date)}" class="${cls(found?.doc_date)}"></label>
         ${type === "customer_po" ? `<label>Delivery date<input name="delivery_date" type="date" value="${h(doc.delivery_date)}" class="${found && doc.delivery_date ? "auto" : ""}"></label>` : ""}
         ${type === "quotation" || type === "purchase_order" ? `<label>Delivery in

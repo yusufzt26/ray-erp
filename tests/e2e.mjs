@@ -415,6 +415,20 @@ await p.click("#lines tr:first-child [name=party_part_no]"); await p.keyboard.ty
 await p.waitForSelector(".suggest:not([hidden]) .sg");
 ok((await p.textContent(".suggest")).includes("SAC-FL-0812"), "part no suggestions from first letters");
 
+// quotation numbers: a deleted number can be typed and reused; used or skipped numbers are refused
+{
+  const call = (method, path, body) => p.evaluate(async ([m, u, bd]) => { const r = await fetch(u, { method: m, headers: { "content-type": "application/json", "x-requested-with": "ray-erp" }, body: bd ? JSON.stringify(bd) : undefined }); return { status: r.status, ...(await r.json()) }; }, [method, path, body]);
+  const qtn = (doc_no) => call("POST", "/api/d/quotation/save", { party_name: "Number Test Co", doc_no, lines: [{ description: "Test part", qty: 1, rate: 10, amount: 10 }] });
+  const a = await qtn(""), b2 = await qtn("");
+  await call("DELETE", "/api/d/quotation/" + a.id);
+  const opts = await getJ("/api/d/quotation/options");
+  ok(opts.free_refs.includes(a.ref_no), "deleted quotation number offered as free");
+  const reused = await qtn(a.ref_no.replace("QTN-0000", ""));
+  ok(reused.ref_no === a.ref_no, "typed free number is used as the quotation number");
+  ok((await qtn(b2.ref_no)).status === 400, "number already used is refused");
+  ok((await qtn("QTN-09999")).status === 400, "skipping ahead is refused");
+}
+
 // users + roles
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "ravi.store"); await p.fill("[name=full_name]", "Ravi"); await p.selectOption("[name=role]", "Store");
