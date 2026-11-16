@@ -215,7 +215,7 @@ await p.fill("#lines tr:first-child [name=party_part_no]", "SAC-FL-0812"); await
 await p.fill("#lines tr:first-child [name=qty]", "100"); await p.fill("#lines tr:first-child [name=rate]", "10");
 await p.fill("[name=total_amount]", "1180");
 await p.selectOption("[name=segment]", "NPD");
-await p.fill("[name=delivery_days]", "10");
+await p.fill("[name=delivery_days]", "10"); await p.fill("[name=notes]", "Fixture extra");
 ok((await p.inputValue("[name=terms]")).includes("valid for 30 days"), "quotation form shows the default terms to edit");
 await p.fill("[name=terms]", (await p.inputValue("[name=terms]")).replace("valid for 30 days", "valid for 15 days"));
 await p.click("button:has-text('Save Quotation')");
@@ -267,6 +267,7 @@ ok((await p.textContent(".inv-page")).includes("One Thousand One Hundred and Eig
 ok((await p.textContent(".inv-page")).includes("Delivery in : 10 days"), "quotation prints delivery in days");
 ok((await p.textContent(".inv-page")).includes("valid for 15 days") && !(await p.textContent(".inv-page")).includes("A/c. Payee Cheque"), "quotation prints its own terms");
 ok((await p.evaluate(() => document.title)) .startsWith("QTN-00001 - "), "PDF file name is the quotation no and customer");
+ok((await p.textContent("tr.notes")).includes("Notes :"), "quotation prints its notes");
 
 await p.goto(U + "/#/d/purchase_order/new"); await p.waitForSelector("text=New Purchase Order"); await p.waitForSelector("#party_id");
 ok((await p.textContent("h1")).includes("PO-00001") && (await p.getAttribute("[name=doc_no]", "placeholder")) === "PO-00001", "new PO shows the number it will get");

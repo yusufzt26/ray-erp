@@ -46,12 +46,12 @@ export async function docPrint({ api, layout, S }, type, id) {
           <td colspan="${priced ? 2 : 1}">Vehicle No</td><td colspan="${priced ? 3 : 2}"><b>${h(doc.eway.vehicle_no || "")}</b></td></tr>` : ""}
         ${!d.own && doc.doc_no ? `<tr><td colspan="2">${h(d.noLabel)}</td><td colspan="${cols - 2}"><b>${h(doc.doc_no)}</b></td></tr>` : ""}
         <tr class="addr"><td colspan="${priced ? 4 : 3}"><b>${type === "purchase_order" || type === "grn" ? "To / Supplier" : "To"} :</b><br>${nl(partyBlock)}</td>
-          <td colspan="${priced ? 4 : 3}">${doc.party_gstin ? `<b>GSTIN :</b> ${h(doc.party_gstin)}<br>` : ""}${deliveryLine(type, doc)}
-            ${doc.notes ? `<b>Ref :</b> ${nl(doc.notes)}` : ""}</td></tr>
+          <td colspan="${priced ? 4 : 3}">${doc.party_gstin ? `<b>GSTIN :</b> ${h(doc.party_gstin)}<br>` : ""}${deliveryLine(type, doc)}</td></tr>
         <tr class="th"><td>S No</td><td>Part No</td><td>Description</td><td>HSN</td><td>Qty</td><td>UOM</td>${priced ? "<td>Rate</td><td>Amount</td>" : ""}</tr>
         ${lines.map((l, i) => `<tr class="item"><td class="c">${i + 1}</td><td>${h(l.party_part_no)}</td><td>${h(l.description)}</td><td class="c">${h(l.hsn)}</td>
           <td class="r">${qty(l.qty)}</td><td class="c">${h(l.uom)}</td>${priced ? `<td class="r">${money(l.rate)}</td><td class="r">${money(l.amount)}</td>` : ""}</tr>`).join("")}
         ${'<tr class="item empty">' + "<td></td>".repeat(cols) + "</tr>"}${("<tr class=\"item empty\">" + "<td></td>".repeat(cols) + "</tr>").repeat(blanks)}
+        ${doc.notes ? `<tr class="notes"><td colspan="${cols}"><b>Notes :</b> ${nl(doc.notes)}</td></tr>` : ""}
         ${priced ? `<tr class="grand"><td colspan="5" rowspan="3"><b>Amount in words :</b><br>${h(amountInWords(total))}</td><td colspan="2">Sub Total</td><td class="r">${money(sub)}</td></tr>
           <tr><td colspan="2">GST / Tax</td><td class="r">${money(total - sub)}</td></tr>
           <tr class="b"><td colspan="2">Total</td><td class="r">${money(total)}</td></tr>`
