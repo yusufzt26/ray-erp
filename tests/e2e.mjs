@@ -215,11 +215,13 @@ await p.fill("#lines tr:first-child [name=party_part_no]", "SAC-FL-0812"); await
 await p.fill("#lines tr:first-child [name=qty]", "100"); await p.fill("#lines tr:first-child [name=rate]", "10");
 await p.fill("[name=total_amount]", "1180");
 await p.selectOption("[name=segment]", "NPD");
+await p.fill("[name=delivery_date]", "2026-12-20");
 await p.click("button:has-text('Save Quotation')");
 await p.waitForSelector("text=QTN-00001 saved");
 ok((await getJ("/api/m/products?show=all")).rows.length === prodCount, "quotation saved with automatic number, no item created");
 await p.click("text=Make Sales Order"); await p.waitForSelector("text=only the quantity still pending");
 ok(await p.inputValue("#lines tr:first-child [name=product_id]") === "1", "sales order from quotation finds the item by part no");
+ok(await p.inputValue("[name=delivery_date]") === "2026-12-20", "quotation delivery date carried to the sales order");
 await p.fill("[name=doc_no]", "SO-TEST-1");
 await p.click("button:has-text('Save Sales Order')"); await p.waitForSelector("text=CPO-00002 saved");
 const soId = Number(p.url().split("/").pop());
@@ -259,13 +261,16 @@ ok(led.rows.filter((r) => /Dispatched/.test(r.kind) && ["DC-00001", "R/26-007"].
 await p.goto(U + "/#/"); await p.waitForSelector(".kpis"); await p.goto(U + "/#/d/quotation/" + (soId - 1) + "/print"); await p.waitForSelector(".inv-page");
 await p.screenshot({ path: join(SHOTS, "quotation_print.png"), fullPage: true });
 ok((await p.textContent(".inv-page")).includes("One Thousand One Hundred and Eighty"), "quotation prints with amount in words");
+ok((await p.textContent(".inv-page")).includes("20-12-2026") || (await p.textContent(".inv-page")).includes("20/12/2026"), "quotation prints the delivery date");
 ok((await p.textContent(".inv-page")).includes("valid for 30 days") && !(await p.textContent(".inv-page")).includes("A/c. Payee Cheque"), "quotation prints its own terms");
 
 await p.goto(U + "/#/d/purchase_order/new"); await p.waitForSelector("text=New Purchase Order"); await p.waitForSelector("#party_id");
 await p.selectOption("#party_id", "1");
 await p.selectOption("#lines tr:first-child [name=product_id]", "2");
 await p.fill("#lines tr:first-child [name=qty]", "500"); await p.fill("#lines tr:first-child [name=rate]", "100");
+await p.fill("[name=delivery_date]", "2026-12-05");
 await p.click("button:has-text('Save Purchase Order')"); await p.waitForSelector("text=PO-00001 saved");
+ok(await p.inputValue("[name=delivery_date]") === "2026-12-05", "PO keeps its delivery date");
 const poId = Number(p.url().split("/").pop());
 const rmBefore = Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance);
 await p.click("text=Make Goods Receipt"); await p.waitForSelector("text=only the quantity still pending");
@@ -396,6 +401,7 @@ await p.click("#logout"); await p.waitForSelector("[name=username]");
 await p.screenshot({ path: join(SHOTS, "login.png") });
 await p.fill("[name=username]", "ravi.store"); await p.fill("[name=password]", "secret1"); await p.click("button");
 await p.waitForSelector("text=Welcome");
+await p.waitForTimeout(1500); // let any slower page from before the login finish and redraw
 ok(!(await p.isVisible("text=Upload Customer PO")), "store has no upload tile");
 await p.goto(U + "/#/users"); await p.waitForSelector("text=Not allowed");
 ok(true, "store blocked from users");

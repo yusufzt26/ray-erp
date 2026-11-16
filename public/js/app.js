@@ -18,7 +18,7 @@ const qtyTxt = (n) => Number(n || 0).toLocaleString("en-IN", { maximumFractionDi
 const num = (v) => { const n = parseFloat(String(v ?? "").replace(/,/g, "")); return Number.isNaN(n) ? 0 : n; };
 
 let S = { user: null, perms: {}, settings: {}, defaultPw: false };
-let flashes = [];
+let flashes = [], shownFlashes = [];
 const flash = (msg, kind = "ok") => flashes.push({ msg, kind });
 
 class ApiError extends Error {
@@ -90,7 +90,7 @@ function layout(body) {
     </header>
     <div class="layout"><nav class="side" onclick="document.body.classList.remove('nav-open')">${side}</nav>
     <main>${flashes.map((f) => `<div class="flash ${f.kind}">${h(f.msg)}</div>`).join("")}${body}</main></div>`;
-  flashes = [];
+  shownFlashes = flashes; flashes = [];
   addInstallButton();
   $("#logout").onclick = async (e) => { e.preventDefault(); await api("POST", "/api/logout", {}); S.user = null; location.hash = "#/login"; };
 }
@@ -586,7 +586,7 @@ pages.docForm = async (type, id, preset = null) => {
         <label class="check" id="create_party_box" ${doc.party_id ? "hidden" : ""}><input type="checkbox" name="create_party" ${found && !found.party ? "checked" : ""}> Add as new ${d.partyLabel.toLowerCase()} in master</label>
         <label>${h(d.noLabel)} ${d.own ? "" : '<span class="req">*</span>'}<input name="doc_no" ${d.own ? `placeholder="Given automatically"` : "required"} value="${h(doc.doc_no)}" class="${cls(found?.doc_no)}"></label>
         <label>${h(d.dateLabel)}<input name="doc_date" type="date" value="${h(doc.doc_date)}" class="${cls(found?.doc_date)}"></label>
-        ${type === "customer_po" ? `<label>Delivery date<input name="delivery_date" type="date" value="${h(doc.delivery_date)}" class="${found && doc.delivery_date ? "auto" : ""}"></label>` : ""}
+        ${["customer_po", "quotation", "purchase_order"].includes(type) ? `<label>${type === "quotation" ? "Delivery date (offered)" : type === "purchase_order" ? "Delivery date (required by)" : "Delivery date"}<input name="delivery_date" type="date" value="${h(doc.delivery_date)}" class="${found && doc.delivery_date ? "auto" : ""}"></label>` : ""}
         <label>Status<select name="status">${d.statuses.map((s) => `<option ${doc.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
         <label>Type<select name="segment">${["Regular", "NPD"].map((s) => `<option value="${s}" ${(doc.segment || "Regular") === s ? "selected" : ""}>${s === "NPD" ? "NPD (new product development)" : "Regular production"}</option>`).join("")}</select></label>
       </div></fieldset></div>
@@ -859,7 +859,7 @@ async function loadMe() {
 let routeSeq = 0, doneSeq = 0;
 async function route() {
   const seq = ++routeSeq;
-  try { await routeInner(); } finally { if (seq < doneSeq) route(); else doneSeq = seq; }
+  try { await routeInner(); } finally { if (seq < doneSeq) { flashes = shownFlashes.concat(flashes); route(); } else doneSeq = seq; }
 }
 
 async function routeInner() {
