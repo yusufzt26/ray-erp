@@ -215,13 +215,14 @@ await p.fill("#lines tr:first-child [name=party_part_no]", "SAC-FL-0812"); await
 await p.fill("#lines tr:first-child [name=qty]", "100"); await p.fill("#lines tr:first-child [name=rate]", "10");
 await p.fill("[name=total_amount]", "1180");
 await p.selectOption("[name=segment]", "NPD");
-await p.fill("[name=delivery_date]", "2026-12-20");
+await p.fill("[name=delivery_days]", "10");
 await p.click("button:has-text('Save Quotation')");
 await p.waitForSelector("text=QTN-00001 saved");
 ok((await getJ("/api/m/products?show=all")).rows.length === prodCount, "quotation saved with automatic number, no item created");
 await p.click("text=Make Sales Order"); await p.waitForSelector("text=only the quantity still pending");
 ok(await p.inputValue("#lines tr:first-child [name=product_id]") === "1", "sales order from quotation finds the item by part no");
-ok(await p.inputValue("[name=delivery_date]") === "2026-12-20", "quotation delivery date carried to the sales order");
+const in10 = new Date(Date.now() + 5.5 * 3600e3 + 10 * 864e5).toISOString().slice(0, 10);
+ok(await p.inputValue("[name=delivery_date]") === in10, "quotation's 10 days becomes the sales order delivery date");
 await p.fill("[name=doc_no]", "SO-TEST-1");
 await p.click("button:has-text('Save Sales Order')"); await p.waitForSelector("text=CPO-00002 saved");
 const soId = Number(p.url().split("/").pop());
@@ -261,16 +262,18 @@ ok(led.rows.filter((r) => /Dispatched/.test(r.kind) && ["DC-00001", "R/26-007"].
 await p.goto(U + "/#/"); await p.waitForSelector(".kpis"); await p.goto(U + "/#/d/quotation/" + (soId - 1) + "/print"); await p.waitForSelector(".inv-page");
 await p.screenshot({ path: join(SHOTS, "quotation_print.png"), fullPage: true });
 ok((await p.textContent(".inv-page")).includes("One Thousand One Hundred and Eighty"), "quotation prints with amount in words");
-ok((await p.textContent(".inv-page")).includes("20-12-2026") || (await p.textContent(".inv-page")).includes("20/12/2026"), "quotation prints the delivery date");
+ok((await p.textContent(".inv-page")).includes("within 10 days from receipt of PO"), "quotation prints delivery in days");
 ok((await p.textContent(".inv-page")).includes("valid for 30 days") && !(await p.textContent(".inv-page")).includes("A/c. Payee Cheque"), "quotation prints its own terms");
 
 await p.goto(U + "/#/d/purchase_order/new"); await p.waitForSelector("text=New Purchase Order"); await p.waitForSelector("#party_id");
+ok((await p.textContent("h1")).includes("PO-00001") && (await p.getAttribute("[name=doc_no]", "placeholder")) === "PO-00001", "new PO shows the number it will get");
 await p.selectOption("#party_id", "1");
 await p.selectOption("#lines tr:first-child [name=product_id]", "2");
 await p.fill("#lines tr:first-child [name=qty]", "500"); await p.fill("#lines tr:first-child [name=rate]", "100");
-await p.fill("[name=delivery_date]", "2026-12-05");
+await p.fill("[name=delivery_days]", "20");
+ok((await p.textContent("#dd_by")).startsWith("By "), "PO shows the date the days come to");
 await p.click("button:has-text('Save Purchase Order')"); await p.waitForSelector("text=PO-00001 saved");
-ok(await p.inputValue("[name=delivery_date]") === "2026-12-05", "PO keeps its delivery date");
+ok(await p.inputValue("[name=delivery_days]") === "20" && (await p.textContent("#dd_by")).startsWith("By "), "PO keeps its delivery days");
 const poId = Number(p.url().split("/").pop());
 const rmBefore = Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance);
 await p.click("text=Make Goods Receipt"); await p.waitForSelector("text=only the quantity still pending");
@@ -384,11 +387,29 @@ ok(await p.inputValue("#nc_code") === "TF", "category code suggested from the na
 await p.screenshot({ path: join(SHOTS, "new_category.png") });
 await p.click("#nc_add"); await p.waitForSelector("text=Category TF - Tooling & Fixtures added");
 ok(await p.inputValue("[name=category]") === "TF", "new category selected");
+await p.waitForFunction(() => document.querySelector("#next_code")?.textContent === "TF-00001");
+ok(true, "new product shows the code it will get");
 await p.fill("[name=name]", "Crimping Fixture 8mm"); await p.click("button[name=save]");
 await p.waitForSelector("text=TF-00001 created");
 ok(true, "product in new category numbered TF-00001");
 await p.goto(U + "/#/m/products/new"); await p.waitForSelector("[name=name]");
 ok(await p.locator("[name=category] option[value=TF]").count() === 1, "new category kept in the list");
+
+// type-ahead on quotation lines
+await p.goto(U + "/#/"); await p.goto(U + "/#/d/quotation/new"); await p.waitForSelector("text=New Quotation"); await p.waitForSelector("#party_id");
+await p.click("#lines tr:first-child [name=description]"); await p.keyboard.type("nfl");
+await p.waitForSelector(".suggest:not([hidden]) .sg");
+ok((await p.textContent(".suggest")).includes("Nylon Fuel Line Assy"), "short form 'nfl' suggests Nylon Fuel Line Assy");
+await p.screenshot({ path: join(SHOTS, "qtn_suggest.png") });
+await p.keyboard.press("ArrowDown"); await p.keyboard.press("Enter");
+ok(await p.inputValue("#lines tr:first-child [name=party_part_no]") === "SAC-FL-0812", "picking a suggestion fills part no");
+await p.fill("#lines tr:first-child [name=party_part_no]", ""); await p.fill("#lines tr:first-child [name=description]", "");
+await p.click("#lines tr:first-child [name=description]"); await p.keyboard.type("new des");
+await p.waitForSelector(".suggest:not([hidden]) .sg");
+ok((await p.textContent(".suggest")).includes("used before"), "lines from earlier quotations are suggested");
+await p.click("#lines tr:first-child [name=party_part_no]"); await p.keyboard.type("sac");
+await p.waitForSelector(".suggest:not([hidden]) .sg");
+ok((await p.textContent(".suggest")).includes("SAC-FL-0812"), "part no suggestions from first letters");
 
 // users + roles
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");

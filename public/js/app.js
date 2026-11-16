@@ -5,6 +5,7 @@ import { morePages } from "./more.js";
 import { linksPanel, payStatus } from "./links.js";
 import { docPrint } from "./docprint.js";
 import { ewayPage } from "./eway.js";
+import { attachSuggest } from "./suggest.js";
 import { bankPages } from "./bank.js";
 import { DASHBOARDS, defaultDash, renderDash } from "./dash.js";
 
@@ -251,7 +252,7 @@ function newCategoryOption(sel) {
       const r = await api("POST", "/api/categories", { code: $("#nc_code").value, name: $("#nc_name").value });
       addCategories([r]);
       sel.querySelector('[value="__new"]').insertAdjacentHTML("beforebegin", `<option value="${h(r.code)}">${h(r.code)} - ${h(r.name)}</option>`);
-      sel.value = prev = r.code; box.hidden = true;
+      sel.value = prev = r.code; box.hidden = true; sel.dispatchEvent(new Event("change"));
       label.insertAdjacentHTML("beforeend", `<small class="ok nc_ok">✓ Category ${h(r.code)} - ${h(r.name)} added. It stays in the list for all products.</small>`);
     } catch (err) { $("#nc_err").innerHTML = errorBox([err.message]); }
     busy(e.target, false);
@@ -270,7 +271,7 @@ pages.masterForm = async (master, id) => {
     <div class="head"><h1>${row ? `${m.singular} <span class="code">${h(row.code)}</span>` : `New ${m.singular}`}</h1>
       <a class="btn" href="#/m/${master}">← Back to list</a></div>
     <div id="err"></div>
-    ${row ? "" : `<p class="muted">The ${master === "products" ? "item code" : "code"} is created automatically when you save.</p>`}
+    ${row ? "" : `<p class="muted">The ${master === "products" ? "item code" : "code"} is created automatically when you save. It will be <b class="code" id="next_code">…</b></p>`}
     <form id="f" class="card form-grid"><fieldset ${editable ? "" : "disabled"}>
       ${m.fields.map((f) => fieldInput(f, values[f.key], { locked: f.key === "category" && !!row })).join("")}
       <label class="check full warn" id="dupbox" hidden><input type="checkbox" name="confirm_dup"> Save anyway (it is a different one)</label>
@@ -303,6 +304,15 @@ pages.masterForm = async (master, id) => {
     }
   };
   if (master === "products" && !row && editable) newCategoryOption($("#f [name=category]"));
+  if (!row) {
+    const showNext = async () => {
+      const cat = master === "products" ? $("#f [name=category]")?.value : "";
+      if (cat === "__new") return;
+      try { $("#next_code").textContent = (await api("GET", `/api/next-code/${master}${cat ? `?category=${encodeURIComponent(cat)}` : ""}`)).code; } catch { $("#next_code").textContent = "—"; }
+    };
+    if (master === "products") $("#f [name=category]")?.addEventListener("change", showNext);
+    showNext();
+  }
   if (master === "products" && row && ["FG", "SA"].includes(row.category)) await more.bomCard(row, editable);
   if ($("#del")) $("#del").onclick = async () => {
     if (!confirm(`Delete ${row.code}?`)) return;
@@ -538,7 +548,7 @@ function lineRow(l, products, flag, type) {
 pages.docForm = async (type, id, preset = null) => {
   const d = DOC_TYPES[type];
   if (!id && !can(type, "edit")) return pages.forbidden();
-  const [{ parties, products }, existing] = await Promise.all([
+  const [{ parties, products, recent, next_ref }, existing] = await Promise.all([
     api("GET", `/api/d/${type}/options`),
     id ? api("GET", `/api/d/${type}/${id}`) : Promise.resolve(null),
   ]);
@@ -556,7 +566,7 @@ pages.docForm = async (type, id, preset = null) => {
   if (found) lines.forEach((l) => (l.found = true));
 
   layout(`
-    <div class="head"><h1>${doc.id ? `${d.singular} <span class="code">${h(doc.ref_no)}</span>` : `New ${d.singular}`}</h1>
+    <div class="head"><h1>${doc.id ? `${d.singular} <span class="code">${h(doc.ref_no)}</span>` : `New ${d.singular} <span class="code" title="Number this ${h(d.singular.toLowerCase())} gets when you save">${h(next_ref)}</span>`}</h1>
       <div class="actions">${doc.id ? convertButtons(type, doc) : ""}
       ${doc.id && d.printTitle ? `<a class="btn" href="#/d/${type}/${doc.id}/print">🖨 Print</a>` : ""}
       ${doc.id && type === "delivery_challan" ? `<a class="btn" href="#/eway/delivery_challan/${doc.id}">🚛 E-way bill${doc.eway?.ewb_no ? " ✓" : ""}</a>` : ""}
@@ -584,9 +594,14 @@ pages.docForm = async (type, id, preset = null) => {
           <input name="party_gstin" id="party_gstin" maxlength="15" value="${h(doc.party_gstin)}" class="upper ${found && doc.party_gstin ? "auto" : ""}">
           ${found && found.gstins.length > 1 ? `<small>GSTINs in file: ${found.gstins.map(h).join(", ")}</small>` : ""}</label>
         <label class="check" id="create_party_box" ${doc.party_id ? "hidden" : ""}><input type="checkbox" name="create_party" ${found && !found.party ? "checked" : ""}> Add as new ${d.partyLabel.toLowerCase()} in master</label>
-        <label>${h(d.noLabel)} ${d.own ? "" : '<span class="req">*</span>'}<input name="doc_no" ${d.own ? `placeholder="Given automatically"` : "required"} value="${h(doc.doc_no)}" class="${cls(found?.doc_no)}"></label>
+        <label>${h(d.noLabel)} ${d.own ? "" : '<span class="req">*</span>'}<input name="doc_no" ${d.own ? `placeholder="${doc.id ? "" : h(next_ref)}"` : "required"} value="${h(doc.doc_no)}" class="${cls(found?.doc_no)}">
+          ${d.own && !doc.id ? `<small>Will be <b>${h(next_ref)}</b>, given automatically when you save</small>` : !d.own && !doc.id ? `<small>Our ref will be <b>${h(next_ref)}</b></small>` : ""}</label>
         <label>${h(d.dateLabel)}<input name="doc_date" type="date" value="${h(doc.doc_date)}" class="${cls(found?.doc_date)}"></label>
-        ${["customer_po", "quotation", "purchase_order"].includes(type) ? `<label>${type === "quotation" ? "Delivery date (offered)" : type === "purchase_order" ? "Delivery date (required by)" : "Delivery date"}<input name="delivery_date" type="date" value="${h(doc.delivery_date)}" class="${found && doc.delivery_date ? "auto" : ""}"></label>` : ""}
+        ${type === "customer_po" ? `<label>Delivery date<input name="delivery_date" type="date" value="${h(doc.delivery_date)}" class="${found && doc.delivery_date ? "auto" : ""}"></label>` : ""}
+        ${type === "quotation" || type === "purchase_order" ? `<label>${type === "quotation" ? "Delivery (days from PO)" : "Delivery within (days)"}
+          <input name="delivery_days" type="number" min="0" max="999" list="daylist" placeholder="e.g. 10" value="${h(doc.delivery_days ?? "")}">
+          <datalist id="daylist">${[2, 7, 10, 15, 21, 30, 45, 60].map((n) => `<option value="${n}">${n} days</option>`).join("")}</datalist>
+          <small id="dd_by">${type === "purchase_order" && doc.delivery_date ? `By ${doc.delivery_date.split("-").reverse().join("/")}` : ""}</small></label>` : ""}
         <label>Status<select name="status">${d.statuses.map((s) => `<option ${doc.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
         <label>Type<select name="segment">${["Regular", "NPD"].map((s) => `<option value="${s}" ${(doc.segment || "Regular") === s ? "selected" : ""}>${s === "NPD" ? "NPD (new product development)" : "Regular production"}</option>`).join("")}</select></label>
       </div></fieldset></div>
@@ -658,7 +673,7 @@ pages.docForm = async (type, id, preset = null) => {
         if (!f("party_part_no").value && p.customer_part_no) f("party_part_no").value = p.customer_part_no;
         if (!f("uom").value) f("uom").value = p.uom || "";
         if (!f("hsn").value) f("hsn").value = p.hsn || "";
-        const rate = type === "customer_po" ? p.sale_rate : p.purchase_rate;
+        const rate = d.side === "sales" ? p.sale_rate : p.purchase_rate;
         if (!f("rate").value && rate) f("rate").value = rate;
         f("create").checked = false;
       }
@@ -669,19 +684,43 @@ pages.docForm = async (type, id, preset = null) => {
     recalc();
   });
   tbody.addEventListener("input", (e) => e.target.name === "amount" && recalc());
+  if (editable) attachSuggest(tbody, {
+    products, recent, rateKey: d.side === "sales" ? "sale_rate" : "purchase_rate",
+    onPick: (r, o) => {
+      const f = (n) => $(`[name=${n}]`, r);
+      f("description").value = o.name || "";
+      f("party_part_no").value = o.part || "";
+      if (o.hsn) f("hsn").value = o.hsn;
+      if (o.uom) f("uom").value = o.uom;
+      if (o.rate && !f("rate").value) f("rate").value = o.rate;
+      if (o.id && type !== "quotation") f("product_id").value = String(o.id);
+      (o.id && type !== "quotation" ? f("product_id") : f("rate")).dispatchEvent(new Event("change", { bubbles: true }));
+      f("qty").focus();
+    },
+  });
   $("#total_amount").addEventListener("input", recalc);
   $("#party_id").onchange = (e) => {
     const o = e.target.selectedOptions[0];
     $("#create_party_box").hidden = !!e.target.value;
     if (e.target.value) { $("#party_name").value = o.dataset.name; if (o.dataset.gstin) $("#party_gstin").value = o.dataset.gstin; }
   };
+  if (type === "purchase_order" && $("[name=delivery_days]")) {
+    const showBy = () => {
+      const n = parseInt($("[name=delivery_days]").value, 10), base = $("[name=doc_date]").value || new Date().toISOString().slice(0, 10);
+      if (Number.isNaN(n)) return ($("#dd_by").textContent = "");
+      const t = new Date(base + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n);
+      $("#dd_by").textContent = `By ${t.toISOString().slice(0, 10).split("-").reverse().join("/")}`;
+    };
+    $("[name=delivery_days]").addEventListener("input", showBy);
+    $("[name=doc_date]").addEventListener("change", showBy);
+  }
   if (!lines.length && editable) addLine();
   renumber();
 
   $("#f").onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const body = Object.fromEntries(["party_id", "party_name", "party_gstin", "doc_no", "doc_date", "delivery_date", "status", "segment", "total_amount", "notes"].map((k) => [k, fd.get(k)]));
+    const body = Object.fromEntries(["party_id", "party_name", "party_gstin", "doc_no", "doc_date", "delivery_date", "delivery_days", "status", "segment", "total_amount", "notes"].map((k) => [k, fd.get(k)]));
     body.create_party = fd.has("create_party");
     body.parent_id = doc.parent_id || null;
     body.id = doc.id || null;

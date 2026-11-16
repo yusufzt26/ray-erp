@@ -6,6 +6,12 @@ import { fitPages } from "./printfit.js";
 const h = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const nl = (v) => h(v).replace(/\n/g, "<br>");
 const dmy = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
+const deliveryLine = (type, doc) => {
+  const n = doc.delivery_days, days = `${n} day${n === 1 ? "" : "s"}`;
+  if (n !== null && n !== undefined && type === "quotation") return `<b>Delivery :</b> within ${days} from receipt of PO<br>`;
+  if (n !== null && n !== undefined) return `<b>Delivery :</b> within ${days}${doc.delivery_date ? `, by ${dmy(doc.delivery_date)}` : ""}<br>`;
+  return doc.delivery_date ? `<b>Delivery by :</b> ${dmy(doc.delivery_date)}<br>` : "";
+};
 const money = (n) => (n === null || n === undefined || n === "" ? "" : Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const qty = (n) => (n === null || n === undefined ? "" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: 3 }));
 
@@ -41,7 +47,7 @@ export async function docPrint({ api, layout, S }, type, id) {
           <td colspan="${priced ? 2 : 1}">Vehicle No</td><td colspan="${priced ? 3 : 2}"><b>${h(doc.eway.vehicle_no || "")}</b></td></tr>` : ""}
         ${!d.own && doc.doc_no ? `<tr><td colspan="2">${h(d.noLabel)}</td><td colspan="${cols - 2}"><b>${h(doc.doc_no)}</b></td></tr>` : ""}
         <tr class="addr"><td colspan="${priced ? 4 : 3}"><b>${type === "purchase_order" || type === "grn" ? "To / Supplier" : "To"} :</b><br>${nl(partyBlock)}</td>
-          <td colspan="${priced ? 4 : 3}">${doc.party_gstin ? `<b>GSTIN :</b> ${h(doc.party_gstin)}<br>` : ""}${doc.delivery_date ? `<b>Delivery by :</b> ${dmy(doc.delivery_date)}<br>` : ""}
+          <td colspan="${priced ? 4 : 3}">${doc.party_gstin ? `<b>GSTIN :</b> ${h(doc.party_gstin)}<br>` : ""}${deliveryLine(type, doc)}
             ${doc.notes ? `<b>Ref :</b> ${nl(doc.notes)}` : ""}</td></tr>
         <tr class="th"><td>S No</td><td>Part No</td><td>Description</td><td>HSN</td><td>Qty</td><td>UOM</td>${priced ? "<td>Rate</td><td>Amount</td>" : ""}</tr>
         ${lines.map((l, i) => `<tr class="item"><td class="c">${i + 1}</td><td>${h(l.party_part_no)}</td><td>${h(l.description)}</td><td class="c">${h(l.hsn)}</td>

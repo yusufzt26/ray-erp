@@ -120,6 +120,16 @@ async function loadCategories(force = false) {
   categoriesAt = Date.now();
 }
 
+// The code a new master record will get (shown on the form; the real one is given on save).
+route("GET", "/api/next-code/:master", async (c) => {
+  const m = masterOf(c.params.master);
+  require(c, c.params.master);
+  const cat = String(new URL(c.req.url).searchParams.get("category") || "FG").toUpperCase();
+  const [counter, prefix, width] = c.params.master === "products" ? [`product_${cat}`, cat, 5] : [m.counter, m.prefix, 4];
+  const row = await one("SELECT value FROM counters WHERE name = $1", [counter]);
+  return json({ code: `${prefix}-${String(Number(row?.value || 0) + 1).padStart(width, "0")}` });
+});
+
 route("GET", "/api/categories", async (c) => {
   if (!c.user) fail(401, "Please log in.");
   return json({ rows: Object.entries(PRODUCT_CATEGORIES).map(([code, name]) => ({ code, name, builtin: BUILTIN_CATEGORIES.includes(code) })) });
@@ -300,7 +310,10 @@ route("POST", "/api/m/:master/import", async (c) => {
 });
 
 // ---------------------------------------------------------------- documents
-const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, subtotal, tax_amount, total_amount, notes, pdf_file, status, eway, segment, created_at";
+/** "10", "10 days", " 30 " -> 10; blank -> null. */
+const deliveryDays = (v: unknown) => { const m = String(v ?? "").match(/\d+/); return m ? Math.min(Number(m[0]), 999) : null; };
+const addDays = (iso: string, n: number) => { const t = new Date(iso + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, delivery_days, subtotal, tax_amount, total_amount, notes, pdf_file, status, eway, segment, created_at";
 
 route("GET", "/api/d/:type", async (c) => {
   docTypeOf(c.params.type);
@@ -328,9 +341,18 @@ route("GET", "/api/d/:type/options", async (c) => {
   const d = docTypeOf(c.params.type);
   require(c, c.params.type);
   const parties = await q(`SELECT id, code, name, gstin FROM ${d.partyTable} WHERE active = 1 ORDER BY name`);
-  const products = await q(`SELECT id, code, name, customer_part_no, sellable, purchasable, uom, hsn, sale_rate, purchase_rate
+  const products = await q(`SELECT id, code, name, customer_part_no, drawing_no, sellable, purchasable, uom, hsn, sale_rate, purchase_rate
     FROM products WHERE active = 1 ORDER BY (CASE WHEN ${d.productFlag} = 1 THEN 0 ELSE 1 END), code`);
-  return json({ parties, products });
+  // Lines typed on earlier documents of the same side (quotations often have no item code), newest first, for type-ahead.
+  const sameSide = Object.entries(DOC_TYPES).filter(([, x]: any) => x.side === (d as any).side).map(([k]) => k);
+  const recent = await q(`SELECT * FROM (SELECT DISTINCT ON (LOWER(COALESCE(l.description, '')), LOWER(COALESCE(l.party_part_no, '')))
+      l.party_part_no, l.description, l.hsn, l.uom, l.rate, d.id AS doc_id
+      FROM document_lines l JOIN documents d ON d.id = l.document_id
+      WHERE d.doc_type = ANY($1) AND d.status <> 'Cancelled' AND COALESCE(l.description, l.party_part_no, '') <> ''
+      ORDER BY LOWER(COALESCE(l.description, '')), LOWER(COALESCE(l.party_part_no, '')), d.id DESC) t ORDER BY doc_id DESC LIMIT 1000`, [sameSide]);
+  const counter = await one("SELECT value FROM counters WHERE name = $1", [`doc_${c.params.type}`]);
+  const next_ref = `${(d as any).prefix}-${String(Number(counter?.value || 0) + 1).padStart(5, "0")}`;
+  return json({ parties, products, recent, next_ref });
 });
 
 route("GET", "/api/d/:type/:id", async (c) => {
@@ -402,7 +424,10 @@ route("POST", "/api/d/:type/save", async (c) => {
     const total = num(b.total_amount) ?? subtotal;
     const header = {
       doc_no: str(b.doc_no), doc_date: isoDate(b.doc_date), party_id: partyId, party_name: partyName, party_gstin: partyGstin,
-      delivery_date: isoDate(b.delivery_date), subtotal, tax_amount: total ? Math.round((total - subtotal) * 100) / 100 : null,
+      delivery_days: deliveryDays(b.delivery_days),
+      delivery_date: deliveryDays(b.delivery_days) !== null && type !== "quotation"
+        ? addDays(isoDate(b.doc_date) || todayIso(), deliveryDays(b.delivery_days)!) : isoDate(b.delivery_date),
+      subtotal, tax_amount: total ? Math.round((total - subtotal) * 100) / 100 : null,
       total_amount: total, notes: str(b.notes), status: d.statuses.includes(b.status) ? b.status : d.statuses[0],
       segment: segmentOf(b.segment),
     };
@@ -810,7 +835,8 @@ route("GET", "/api/convert/:id/:target", async (c) => {
     status: td.statuses[0], total_amount: target === "vendor_invoice" ? null : Math.round(sub * (ratio || 1) * 100) / 100,
     doc_no: target === "customer_po" ? "" : target === "vendor_invoice" ? "" : null,
     notes: `From ${(DOC_TYPES as any)[src.doc_type].singular} ${src.ref_no}${!fromOwn && src.doc_no ? ` (${src.doc_no})` : ""}`,
-    delivery_date: src.delivery_date, segment: src.segment || "Regular",
+    delivery_days: src.delivery_days ?? null,
+    delivery_date: src.delivery_days != null ? addDays(todayIso(), src.delivery_days) : src.delivery_date, segment: src.segment || "Regular",
   };
   return json({ doc, lines, source: { type: src.doc_type, id: src.id, ref_no: src.ref_no } });
 });
