@@ -325,3 +325,8 @@ input.gstpct { width: 4.5rem; }
 .gsttot #gst_why { display: block; color: #5a6877; }
 .gstnote { flex-basis: 100%; display: flex; gap: .8rem; align-items: center; }
 .gstnote small:empty { display: none; }
+
+/* sortable list headings */
+table.grid th { cursor: pointer; user-select: none; }
+table.grid th[data-sort="asc"]::after { content: " ▲"; font-size: .7em; }
+table.grid th[data-sort="desc"]::after { content: " ▼"; font-size: .7em; }

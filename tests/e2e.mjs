@@ -549,6 +549,22 @@ await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin
   await p.goto(U + "/#/d/purchase_order/" + gid); await p.waitForSelector("#igst");
   await p.screenshot({ path: join(SHOTS, "po_gst.png"), fullPage: true });
 }
+// lists sort by a clicked column heading; new customer gets State and PAN from the GSTIN
+{
+  await p.goto(U + "/#/d/purchase_order?period="); await p.waitForSelector("table.grid th");
+  const refs = async () => p.$$eval("table.grid tr[data-href] td:first-child", (tds) => tds.map((t) => t.textContent.trim()));
+  await p.click("table.grid th:first-child");
+  const asc = await refs();
+  ok(asc.length > 1 && asc.every((r, i) => i === 0 || asc[i - 1] <= r), "click heading sorts ascending " + asc.join(","));
+  await p.click("table.grid th:first-child");
+  const desc = await refs();
+  ok(desc.join() === [...asc].reverse().join(), "click again sorts descending");
+  await p.screenshot({ path: join(SHOTS, "list_sorted.png") });
+  await p.goto(U + "/#/m/vendors/new"); await p.waitForSelector("[name=gstin]");
+  await p.fill("[name=gstin]", "24AAACP5678K1Z2");
+  ok(await p.inputValue("[name=state]") === "Gujarat" && await p.inputValue("[name=pan]") === "AAACP5678K", "new vendor: State and PAN filled from GSTIN");
+  await p.screenshot({ path: join(SHOTS, "vendor_gstin_fill.png") });
+}
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "priya.accounts"); await p.fill("[name=full_name]", "Priya"); await p.selectOption("[name=role]", "Accounts");
 await p.fill("[name=password]", "secret2"); await p.click("button.primary"); await p.waitForSelector("text=User saved");

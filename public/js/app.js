@@ -281,6 +281,22 @@ pages.masterForm = async (master, id) => {
     ${row && editable ? '<button class="btn danger small" id="del">Delete</button>' : ""}`);
   let again = false;
   $$("#f button").forEach((b) => (b.onclick = () => { again = b.name === "again"; }));
+  const gIn = $("#f [name=gstin]"), stIn = $("#f [name=state]"), panIn = $("#f [name=pan]");
+  if (gIn && (stIn || panIn)) {
+    // GSTIN = 2-digit state code + 10-character PAN + 3 more: fill State and PAN from it (still editable).
+    let filled = { state: "", pan: "" };
+    gIn.addEventListener("input", () => {
+      const g = gIn.value.trim().toUpperCase();
+      if (!/^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]{3}$/.test(g)) return;
+      const code = Number(g.slice(0, 2));
+      const name = Object.keys(GST_STATE_CODES).find((k) => GST_STATE_CODES[k] === code);
+      if (stIn && name && (!stIn.value || stIn.value === filled.state)) {
+        const opt = [...stIn.options].find((o) => o.value.toLowerCase() === name);
+        if (opt) { stIn.value = opt.value; filled.state = opt.value; stIn.classList.add("auto"); }
+      }
+      if (panIn && (!panIn.value || panIn.value === filled.pan)) { panIn.value = g.slice(2, 12); filled.pan = panIn.value; panIn.classList.add("auto"); }
+    });
+  }
   $("#f").onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -1030,6 +1046,34 @@ async function routeInner() {
   }
 }
 
+// Any list: click a column heading to sort by it; click again to reverse.
+const sortKey = (text) => {
+  const t = text.trim();
+  let m = t.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return [0, Number(m[3] + m[2] + m[1])];
+  m = t.replace(/[₹\s]/g, "").replace(/,/g, "");
+  if (/^-?\d+(\.\d+)?$/.test(m)) return [0, Number(m)];
+  const n = t.match(/^([A-Z]{1,5}[-/])(\d+)$/i); // codes like PO-00012 sort by their number
+  if (n) return [1, n[1].toLowerCase() + n[2].padStart(10, "0")];
+  return [t ? 1 : 2, t.toLowerCase()];
+};
+document.addEventListener("click", (e) => {
+  const th = e.target.closest("table.grid th");
+  if (!th || !th.textContent.trim() || e.target.closest("a, button, input, select")) return;
+  const head = th.parentElement, table = th.closest("table");
+  const col = [...head.children].indexOf(th);
+  const rows = [...table.querySelectorAll("tr")].filter((r) => r !== head && r.querySelector("td") && !r.classList.contains("tot")
+    && !(r.children.length === 1 && r.children[0].colSpan > 1));
+  if (rows.length < 2) return;
+  const dir = th.dataset.sort === "asc" ? "desc" : "asc";
+  head.querySelectorAll("th").forEach((x) => delete x.dataset.sort);
+  th.dataset.sort = dir;
+  const keyed = rows.map((r) => [sortKey(r.children[col]?.textContent || ""), r]);
+  keyed.sort(([a], [b]) => (a[0] - b[0]) || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+  if (dir === "desc") keyed.reverse();
+  const anchor = rows[rows.length - 1].nextSibling, parent = rows[0].parentElement;
+  keyed.forEach(([, r]) => parent.insertBefore(r, anchor));
+});
 document.addEventListener("click", (e) => {
   if (e.target.closest("a, button, input, select")) return;
   const tr = e.target.closest("tr[data-href]");
