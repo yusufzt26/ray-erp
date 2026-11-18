@@ -935,7 +935,7 @@ route("GET", "/api/stock", async (c) => {
   const sp = new URL(c.req.url).searchParams;
   const qs = str(sp.get("q")), cat = str(sp.get("cat"));
   const params: unknown[] = [];
-  let where = "p.active = 1";
+  let where = "p.active = 1 AND p.category <> 'SV'"; // services are bought and sold but never held in stock
   if (qs) { params.push(`%${qs}%`); where += ` AND (p.code ILIKE $${params.length} OR p.name ILIKE $${params.length} OR p.customer_part_no ILIKE $${params.length} OR p.drawing_no ILIKE $${params.length})`; }
   if (cat && (PRODUCT_CATEGORIES as any)[cat]) { params.push(cat); where += ` AND p.category = $${params.length}`; }
   const rows = await q(`SELECT p.id, p.code, p.name, p.category, p.uom, p.customer_part_no,
@@ -1124,7 +1124,7 @@ route("GET", "/api/dash/:view", async (c) => {
   }
   if (view === "store" || view === "admin") {
     const stock = await q(`SELECT p.id, p.code, p.name, p.category, p.uom, COALESCE(f.balance, 0) AS balance
-      FROM products p LEFT JOIN (${STOCK_SUM}) f ON f.product_id = p.id WHERE p.active = 1 ORDER BY p.code`);
+      FROM products p LEFT JOIN (${STOCK_SUM}) f ON f.product_id = p.id WHERE p.active = 1 AND p.category <> 'SV' ORDER BY p.code`);
     out.stock = stock.map((r) => ({ ...r, balance: Number(r.balance) }));
     const disp = await q(`SELECT to_char(day, 'YYYY-MM') AS m, -SUM(qty) AS q FROM stock_flow WHERE grp = 'out' AND day >= $1 GROUP BY 1`, [from12]);
     const dby = Object.fromEntries(disp.map((r) => [r.m, Number(r.q)]));

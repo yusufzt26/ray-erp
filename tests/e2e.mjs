@@ -457,6 +457,16 @@ ok((await p.textContent(".suggest")).includes("SAC-FL-0812"), "part no suggestio
   ok((await po(pa.ref_no)).status === 400, "PO number already used is refused");
 }
 
+// services: bought and sold like items, never in stock
+{
+  const res = await p.evaluate(async () => (await fetch("/api/m/products", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "ray-erp" },
+    body: JSON.stringify({ name: "Tube cutting job work", category: "SV", uom: "JOB", hsn: "998898", gst_rate: 18, sellable: true, purchasable: true, active: true }) })).json());
+  ok(/^SV-0000\d$/.test(res.code || ""), "service item gets an SV code " + JSON.stringify(res));
+  ok(!(await getJ("/api/stock")).rows.some((r) => r.code === res.code), "service is not listed in stock");
+  ok((await getJ("/api/d/purchase_order/options")).products.some((x) => x.code === res.code), "service can be picked on a PO");
+  ok((await getJ("/api/d/quotation/options")).products.some((x) => x.code === res.code), "service can be picked on a quotation");
+}
+
 // users + roles
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "ravi.store"); await p.fill("[name=full_name]", "Ravi"); await p.selectOption("[name=role]", "Store");

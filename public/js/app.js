@@ -399,6 +399,7 @@ async function sheetToRows(master, file) {
   const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: true });
   const lookup = { code: "code", "item code": "code" };
   for (const f of m.fields) { lookup[f.label.toLowerCase()] = f.key; lookup[f.key] = f.key; }
+  if (lookup.hsn) Object.assign(lookup, { "hsn code": "hsn", "sac code": "hsn", hsn: "hsn", sac: "hsn" }); // older sheets say "HSN Code"
   const header = (aoa[0] || []).map((x) => lookup[String(x).trim().toLowerCase().replace(" (required)", "")]);
   if (!header.includes("name")) throw new Error("The first row must have column headings, including a 'Name' column. Download the template to see the layout.");
   const rows = [];

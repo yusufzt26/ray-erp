@@ -19,7 +19,7 @@ export const MODULES = {
   users: "Users & Roles",
 };
 
-export const BUILTIN_CATEGORIES = ["FG", "SA", "CP", "RM", "BO", "CN", "PK"];
+export const BUILTIN_CATEGORIES = ["FG", "SA", "CP", "RM", "BO", "CN", "PK", "SV"];
 export const PRODUCT_CATEGORIES = {
   FG: "Finished Good (pipe / assembly)",
   SA: "Sub-Assembly",
@@ -28,7 +28,10 @@ export const PRODUCT_CATEGORIES = {
   BO: "Bought-Out Item",
   CN: "Consumable",
   PK: "Packing Material",
+  SV: "Service (no stock)",
 };
+/** Categories that are never counted in stock (services such as job work, testing, tooling, transport). */
+export const NON_STOCK = ["SV"];
 
 export const INDIAN_STATES = ["", "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", "Goa",
   "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka", "Kerala", "Madhya Pradesh", "Maharashtra",
@@ -77,8 +80,8 @@ const PRODUCT_FIELDS = [
   F("drawing_no", "Our Part / Drawing No", { help: "e.g. BR20658. Printed on box labels" }),
   F("material", "Material", { help: "e.g. PA12, PA11, PA6" }),
   F("description", "Description", { type: "textarea" }),
-  F("uom", "Unit (UOM)", { type: "select", inList: true, options: ["NOS", "SET", "KG", "MTR", "LTR", "BOX", "PCS", "ROLL"].map((u) => [u, u]) }),
-  F("hsn", "HSN Code"),
+  F("uom", "Unit (UOM)", { type: "select", inList: true, options: ["NOS", "SET", "KG", "MTR", "LTR", "BOX", "PCS", "ROLL", "JOB", "HRS", "LOT"].map((u) => [u, u]) }),
+  F("hsn", "HSN / SAC Code", { help: "SAC code for a service, e.g. 998898 job work, 998346 design" }),
   F("gst_rate", "GST %", { type: "number" }),
   F("sale_rate", "Sale Rate", { type: "number" }),
   F("purchase_rate", "Purchase Rate", { type: "number" }),
