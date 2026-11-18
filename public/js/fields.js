@@ -1,7 +1,7 @@
 // Shared by the browser app and the API function. One definition drives the
 // list pages, add/edit forms, Excel/CSV templates, import and export.
 
-export const ROLES = ["Admin", "Purchaser", "Sales", "Store", "Production"];
+export const ROLES = ["Admin", "Purchaser", "Sales", "Store", "Production", "Accounts"];
 export const LEVELS = ["none", "view", "edit"];
 export const MODULES = {
   customers: "Customers",

@@ -29,7 +29,7 @@ export const DASHBOARDS = {
   purchase: { label: "Purchase", icon: "🛒", perm: "vendor_invoice" },
   store: { label: "Store", icon: "📦", perm: "stock" },
 };
-export const defaultDash = (role) => ({ Admin: "admin", Sales: "sales", Purchaser: "purchase", Store: "store", Production: "store" })[role] || "sales";
+export const defaultDash = (role) => ({ Admin: "admin", Sales: "sales", Purchaser: "purchase", Store: "store", Production: "store", Accounts: "sales" })[role] || "sales";
 
 function stockParts(stock) {
   const fg = stock.filter((s) => s.category === "FG" || s.category === "SA");

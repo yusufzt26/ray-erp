@@ -478,6 +478,21 @@ await p.goto(U + "/#/accounts"); await p.waitForSelector("text=Not allowed");
 ok(true, "store blocked from accounts");
 await p.goto(U + "/#/stock"); await p.waitForSelector("text=Stock entry");
 ok(true, "store can make stock entries");
+
+// accounts user: payments, bank and invoices; orders read-only; no user admin
+await p.click("#logout"); await p.waitForSelector("[name=username]");
+await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin123"); await p.click("button"); await p.waitForSelector("text=Welcome");
+await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
+await p.fill("[name=username]", "priya.accounts"); await p.fill("[name=full_name]", "Priya"); await p.selectOption("[name=role]", "Accounts");
+await p.fill("[name=password]", "secret2"); await p.click("button.primary"); await p.waitForSelector("text=User saved");
+await p.click("#logout"); await p.waitForSelector("[name=username]");
+await p.fill("[name=username]", "priya.accounts"); await p.fill("[name=password]", "secret2"); await p.click("button"); await p.waitForSelector("text=Welcome");
+await p.waitForTimeout(1000);
+await p.goto(U + "/#/accounts"); await p.waitForSelector("h1"); ok(!(await p.isVisible("text=Not allowed")), "accounts user opens Accounts");
+await p.goto(U + "/#/bank"); await p.waitForSelector("h1"); ok(!(await p.isVisible("text=Not allowed")), "accounts user opens Bank");
+await p.goto(U + "/#/payments/new"); await p.waitForSelector("h1"); ok(!(await p.isVisible("text=Not allowed")), "accounts user can record a payment");
+await p.goto(U + "/#/d/quotation"); await p.waitForSelector("h1"); ok(!(await p.isVisible("text=New Quotation")), "accounts user sees quotations read-only");
+await p.goto(U + "/#/users"); await p.waitForSelector("text=Not allowed"); ok(true, "accounts user blocked from users");
 ok(errors.length === 0, "no page errors " + errors.join(" | "));
 await b.close();
 console.log(failed ? `${failed} FAILED` : "ALL PASSED");
