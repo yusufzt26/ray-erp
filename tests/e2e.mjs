@@ -564,6 +564,12 @@ await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin
   await p.fill("[name=gstin]", "24AAACP5678K1Z2");
   ok(await p.inputValue("[name=state]") === "Gujarat" && await p.inputValue("[name=pan]") === "AAACP5678K", "new vendor: State and PAN filled from GSTIN");
   await p.screenshot({ path: join(SHOTS, "vendor_gstin_fill.png") });
+  await p.waitForSelector("#gstin_note a"); ok((await p.textContent("#gstin_note")).includes("GST portal"), "unknown GSTIN offers the GST portal look-up");
+  await p.goto(U + "/#/m/customers/new"); await p.waitForSelector("[name=gstin]");
+  await p.fill("[name=gstin]", "27AAFFP5555Q1ZK");
+  await p.waitForFunction(() => document.querySelector("[name=name]").value);
+  ok(await p.inputValue("[name=name]") === "Polytube Extrusions LLP" && await p.inputValue("[name=state]") === "Maharashtra", "new customer: name filled from the vendor with the same GSTIN");
+  await p.screenshot({ path: join(SHOTS, "customer_gstin_name.png") });
 }
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "priya.accounts"); await p.fill("[name=full_name]", "Priya"); await p.selectOption("[name=role]", "Accounts");

@@ -130,6 +130,28 @@ route("GET", "/api/next-code/:master", async (c) => {
   return json({ code: `${prefix}-${String(Number(row?.value || 0) + 1).padStart(width, "0")}` });
 });
 
+// Name and address for a GSTIN, from what the app already knows: the other master
+// (a customer who is also a vendor), uploaded orders and bills, and old invoices.
+route("GET", "/api/gstin/:gstin", async (c) => {
+  if (!c.user) fail(401, "Please log in.");
+  const g = str(c.params.gstin).toUpperCase();
+  if (!/^\d{2}[A-Z0-9]{13}$/.test(g)) fail(400, "Give a 15-character GSTIN.");
+  const own = str(new URL(c.req.url).searchParams.get("master"));
+  const cols = "name, address, city, state, pincode, pan, contact_person, phone, email";
+  for (const t of ["customers", "vendors"]) {
+    const r = await one(`SELECT code, ${cols} FROM ${t} WHERE UPPER(gstin) = $1 ORDER BY id DESC LIMIT 1`, [g]);
+    if (r) return json({ found: true, same: t === own, source: `${t === "customers" ? "Customer" : "Vendor"} ${r.code}`, ...r });
+  }
+  const d = await one(`SELECT party_name AS name, ref_no FROM documents WHERE UPPER(party_gstin) = $1 AND COALESCE(party_name, '') <> '' ORDER BY id DESC LIMIT 1`, [g]);
+  if (d) return json({ found: true, source: `document ${d.ref_no}`, name: d.name });
+  const i = await one(`SELECT bill_to, inv_no FROM invoices WHERE UPPER(gstin) = $1 AND COALESCE(bill_to, '') <> '' ORDER BY id DESC LIMIT 1`, [g]);
+  if (i) {
+    const ls = String(i.bill_to).split("\n").map((x: string) => x.trim()).filter(Boolean);
+    return json({ found: true, source: `invoice ${i.inv_no}`, name: ls[0], address: ls.slice(1).join("\n") || null });
+  }
+  return json({ found: false });
+});
+
 route("GET", "/api/categories", async (c) => {
   if (!c.user) fail(401, "Please log in.");
   return json({ rows: Object.entries(PRODUCT_CATEGORIES).map(([code, name]) => ({ code, name, builtin: BUILTIN_CATEGORIES.includes(code) })) });

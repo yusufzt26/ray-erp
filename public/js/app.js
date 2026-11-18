@@ -295,7 +295,21 @@ pages.masterForm = async (master, id) => {
         if (opt) { stIn.value = opt.value; filled.state = opt.value; stIn.classList.add("auto"); }
       }
       if (panIn && (!panIn.value || panIn.value === filled.pan)) { panIn.value = g.slice(2, 12); filled.pan = panIn.value; panIn.classList.add("auto"); }
+      // Name, address and contact from records already in the app; empty boxes only.
+      if (master === "customers" || master === "vendors") api("GET", `/api/gstin/${g}?master=${master}`).then((r) => {
+        if (gIn.value.trim().toUpperCase() !== g) return;
+        const note = $("#gstin_note");
+        if (!r.found) { note.innerHTML = `Not found in the app yet. <a href="https://services.gst.gov.in/services/searchtp" target="_blank" rel="noopener">Look up the name on the GST portal ↗</a>`; return; }
+        const filledNow = [];
+        for (const k of ["name", "address", "city", "pincode", "contact_person", "phone", "email"]) {
+          const el = $(`#f [name=${k}]`);
+          if (el && r[k] && !el.value) { el.value = r[k]; el.classList.add("auto"); filledNow.push(k.replace("_", " ")); }
+        }
+        note.innerHTML = r.same ? `<b class="pend">This GSTIN is already saved as ${h(r.source)}.</b>`
+          : filledNow.length ? `Filled ${filledNow.join(", ")} from ${h(r.source)}. Please check.` : `Same GSTIN as ${h(r.source)}.`;
+      }).catch(() => {});
     });
+    gIn.insertAdjacentHTML("afterend", '<small id="gstin_note"></small>');
   }
   $("#f").onsubmit = async (e) => {
     e.preventDefault();
