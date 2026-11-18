@@ -1,5 +1,5 @@
 // Stock, Sales Register and Accounts screens.
-import { PRODUCT_CATEGORIES } from "./fields.js";
+import { PRODUCT_CATEGORIES, segmentFilter } from "./fields.js";
 
 const h = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const money = (n) => Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -220,7 +220,7 @@ export function morePages(ctx) {
         <label class="inline">From <input type="date" name="from" value="${from}"></label>
         <label class="inline">To <input type="date" name="to" value="${to}"></label>
         <input type="hidden" name="view" value="${view}">
-        <select name="segment"><option value="">All (Regular + NPD)</option><option value="Regular" ${seg === "Regular" ? "selected" : ""}>Regular production</option><option value="NPD" ${seg === "NPD" ? "selected" : ""}>NPD</option></select>
+        ${segmentFilter(seg).replace(' onchange="this.form.requestSubmit()"', "")}
         <button class="btn">Show</button>
       </form>
       <div class="quick">

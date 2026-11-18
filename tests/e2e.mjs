@@ -455,6 +455,11 @@ ok((await p.textContent(".suggest")).includes("SAC-FL-0812"), "part no suggestio
   const pm = await po(pa.ref_no, pb.id);
   ok(pm.status === 200 && pm.ref_no === pa.ref_no, "saved PO renumbered to a deleted number " + JSON.stringify(pm));
   ok((await po(pa.ref_no)).status === 400, "PO number already used is refused");
+  const ex = await call("POST", "/api/d/purchase_order/save", { party_name: "Office Supplier", segment: "Expense", lines: [{ description: "Office chairs", qty: 2, rate: 3000, amount: 6000 }] });
+  const exRows = (await getJ("/api/d/purchase_order?segment=Expense")).rows;
+  ok(exRows.some((r) => r.id === ex.id && r.segment === "Expense") && !(await getJ("/api/d/purchase_order?segment=Regular")).rows.some((r) => r.id === ex.id), "Expense type saved and filtered");
+  await p.goto(U + "/#/d/purchase_order?segment=Expense"); await p.waitForSelector(".pill.exp");
+  ok(await p.isVisible("select[name=segment] >> text=Expenses") || (await p.inputValue("select[name=segment]")) === "Expense", "Expenses offered in the type filter");
 }
 
 // services: bought and sold like items, never in stock

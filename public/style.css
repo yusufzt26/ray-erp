@@ -317,3 +317,4 @@ table.bank .det input.qty { width: 100px; margin-left: 4px; }
 .days { display: flex; align-items: center; gap: 8px; }
 .days input { width: 7ch; text-align: right; }
 .days > span { color: var(--muted); }
+.pill.exp { background: #fdebd3; color: #8a4b08; font-weight: 600; }

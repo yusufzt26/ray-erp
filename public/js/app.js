@@ -1,4 +1,4 @@
-import { CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, addCategories } from "./fields.js";
+import { CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, addCategories, segmentChoice, segmentFilter, segmentPill } from "./fields.js";
 import { imageToCanvas, readImage, readPdf, readScannedPdf, readSheet } from "./pdfread.js";
 import { invoicePages } from "./invoice.js";
 import { morePages } from "./more.js";
@@ -96,8 +96,7 @@ function layout(body) {
   $("#logout").onclick = async (e) => { e.preventDefault(); await api("POST", "/api/logout", {}); S.user = null; location.hash = "#/login"; };
 }
 
-export const segmentSelect = (seg) => `<select name="segment" onchange="this.form.requestSubmit()"><option value="">All (Regular + NPD)</option>
-  <option value="Regular" ${seg === "Regular" ? "selected" : ""}>Regular production</option><option value="NPD" ${seg === "NPD" ? "selected" : ""}>NPD</option></select>`;
+export const segmentSelect = segmentFilter;
 const errorBox = (errs) => (errs?.length ? `<div class="flash error">${errs.map(h).join("<br>")}</div>` : "");
 
 // ------------------------------------------------------------------ pages
@@ -432,7 +431,7 @@ pages.docList = async (type) => {
       <tr>${d.own ? `<th>${h(d.noLabel)}</th>` : `<th>Our ref</th><th>${h(d.noLabel)}</th>`}<th>${h(d.dateLabel)}</th><th>${d.partyLabel}</th>
         ${withDays ? "<th>Delivery</th>" : ""}<th class="num">Total</th><th>Status</th><th>PDF</th></tr>
       ${rows.map((r) => `<tr class="click" data-href="#/d/${type}/${r.id}">${d.own ? `<td><b>${h(r.ref_no)}</b></td>` : `<td><b>${h(r.ref_no)}</b></td><td>${h(r.doc_no)}</td>`}<td>${h(r.doc_date ? r.doc_date.split("-").reverse().join("/") : "")}</td>
-        <td>${h(r.party_name)}</td>${withDays ? `<td>${r.delivery_days != null ? `${h(r.delivery_days)} days` : ""}</td>` : ""}<td class="num">${money(r.total_amount)}</td><td><span class="pill">${h(r.status)}</span>${r.segment === "NPD" ? ' <span class="pill npd">NPD</span>' : ""}</td>
+        <td>${h(r.party_name)}</td>${withDays ? `<td>${r.delivery_days != null ? `${h(r.delivery_days)} days` : ""}</td>` : ""}<td class="num">${money(r.total_amount)}</td><td><span class="pill">${h(r.status)}</span>${segmentPill(r.segment)}</td>
         <td class="nowrap">${d.printTitle ? `<a class="btn small" href="#/d/${type}/${r.id}/print" title="Open the print page, then Save as PDF">🖨 PDF</a>` : ""}${r.pdf_file ? ' <span title="Uploaded file attached">📄</span>' : ""}</td></tr>`).join("")
         || `<tr><td colspan="9" class="muted">No ${d.title.toLowerCase()} yet.</td></tr>`}
     </table></div>`);
@@ -607,7 +606,7 @@ pages.docForm = async (type, id, preset = null) => {
           <span class="days"><input name="delivery_days" type="text" inputmode="numeric" maxlength="3" autocomplete="off" value="${h(doc.delivery_days ?? "")}"><span>days</span></span>
           <small id="dd_by">${type === "purchase_order" && doc.delivery_date ? `By ${doc.delivery_date.split("-").reverse().join("/")}` : ""}</small></label>` : ""}
         <label>Status<select name="status">${d.statuses.map((s) => `<option ${doc.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
-        <label>Type<select name="segment">${["Regular", "NPD"].map((s) => `<option value="${s}" ${(doc.segment || "Regular") === s ? "selected" : ""}>${s === "NPD" ? "NPD (new product development)" : "Regular production"}</option>`).join("")}</select></label>
+        <label>Type${segmentChoice(doc.segment)}</label>
       </div></fieldset></div>
       ${pdfUrl ? `<div class="pdfpane">${srcExt === "jpg" || srcExt === "png" || found?.kind === "image"
           ? `<div class="imgprev"><img src="${pdfUrl}" alt="Uploaded photo"></div>` : `<iframe src="${pdfUrl}" title="Uploaded file"></iframe>`}

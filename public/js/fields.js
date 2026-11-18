@@ -19,6 +19,12 @@ export const MODULES = {
   users: "Users & Roles",
 };
 
+/** Type of a document: regular production, new product development, or an expense (not for production). */
+export const SEGMENTS = [["Regular", "Regular production"], ["NPD", "NPD (new product development)"], ["Expense", "Expenses"]];
+export const segmentPill = (seg) => (seg === "NPD" ? ' <span class="pill npd">NPD</span>' : seg === "Expense" ? ' <span class="pill exp">Expense</span>' : "");
+export const segmentFilter = (seg) => `<select name="segment" onchange="this.form.requestSubmit()"><option value="">All types</option>${SEGMENTS.map(([v, l]) => `<option value="${v}" ${seg === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+export const segmentChoice = (cur) => `<select name="segment">${SEGMENTS.map(([v, l]) => `<option value="${v}" ${(cur || "Regular") === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+
 export const BUILTIN_CATEGORIES = ["FG", "SA", "CP", "RM", "BO", "CN", "PK", "SV"];
 export const PRODUCT_CATEGORIES = {
   FG: "Finished Good (pipe / assembly)",

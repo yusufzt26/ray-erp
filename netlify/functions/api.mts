@@ -39,7 +39,7 @@ const num = (v: unknown) => {
   return Number.isNaN(n) ? null : n;
 };
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v).trim());
-const segmentOf = (v: unknown) => (str(v).toUpperCase() === "NPD" ? "NPD" : "Regular");
+const segmentOf = (v: unknown) => { const u = str(v).toUpperCase(); return u === "NPD" ? "NPD" : u.startsWith("EXPENSE") ? "Expense" : "Regular"; };
 const isoDate = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(str(v)) ? str(v) : null);
 
 // ---------------------------------------------------------------- masters
