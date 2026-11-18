@@ -458,6 +458,14 @@ ok((await p.textContent(".suggest")).includes("SAC-FL-0812"), "part no suggestio
   const ex = await call("POST", "/api/d/purchase_order/save", { party_name: "Office Supplier", segment: "Expense", lines: [{ description: "Office chairs", qty: 2, rate: 3000, amount: 6000 }] });
   const exRows = (await getJ("/api/d/purchase_order?segment=Expense")).rows;
   ok(exRows.some((r) => r.id === ex.id && r.segment === "Expense") && !(await getJ("/api/d/purchase_order?segment=Regular")).rows.some((r) => r.id === ex.id), "Expense type saved and filtered");
+  // date filter: an old PO shows under "All dates" only; today's PO under every period
+  const old = await call("POST", "/api/d/purchase_order/save", { party_name: "Old Vendor", doc_date: "2024-01-10", lines: [{ description: "Old RM", qty: 1, rate: 5, amount: 5 }] });
+  const ids = async (per) => (await getJ("/api/d/purchase_order?period=" + per)).rows.map((r) => r.id);
+  const [all, today, week, month, year] = await Promise.all(["", "today", "week", "month", "year"].map(ids));
+  ok(all.includes(old.id) && [today, week, month, year].every((l) => !l.includes(old.id) && l.includes(ex.id)), "PO date filter: today / week / month / year / all");
+  ok((await getJ("/api/invoices?period=today")).rows.length <= (await getJ("/api/invoices")).rows.length, "invoice list takes the date filter");
+  await p.goto(U + "/#/d/customer_po?period=month"); await p.waitForSelector("select[name=period]");
+  ok(await p.inputValue("select[name=period]") === "month", "sales order list shows the date filter");
   await p.goto(U + "/#/d/purchase_order?segment=Expense"); await p.waitForSelector(".pill.exp");
   ok(await p.isVisible("select[name=segment] >> text=Expenses") || (await p.inputValue("select[name=segment]")) === "Expense", "Expenses offered in the type filter");
 }

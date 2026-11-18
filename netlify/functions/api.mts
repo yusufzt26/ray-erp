@@ -326,6 +326,18 @@ async function ownNumber(query: any, type: string, prefix: string, typed: string
   return want;
 }
 
+/** First day (India time) of today / this week (from Monday) / this month / this financial year (from 1 April); null = all dates. */
+function periodStart(p: unknown): string | null {
+  const today = new Date(Date.now() + 5.5 * 3600e3);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const y = today.getUTCFullYear(), m = today.getUTCMonth();
+  if (p === "today") return iso(today);
+  if (p === "week") return iso(new Date(today.getTime() - ((today.getUTCDay() + 6) % 7) * 864e5));
+  if (p === "month") return iso(new Date(Date.UTC(y, m, 1)));
+  if (p === "year") return iso(new Date(Date.UTC(m >= 3 ? y : y - 1, 3, 1)));
+  return null;
+}
+
 /** "10", "10 days", " 30 " -> 10; blank -> null. */
 const deliveryDays = (v: unknown) => { const m = String(v ?? "").match(/\d+/); return m ? Math.min(Number(m[0]), 999) : null; };
 const addDays = (iso: string, n: number) => { const t = new Date(iso + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
@@ -340,6 +352,8 @@ route("GET", "/api/d/:type", async (c) => {
   if (qs) { params.push(`%${qs}%`); sql += ` AND (doc_no ILIKE $${params.length} OR ref_no ILIKE $${params.length} OR party_name ILIKE $${params.length})`; }
   const seg = str(new URL(c.req.url).searchParams.get("segment"));
   if (seg) { params.push(segmentOf(seg)); sql += ` AND segment = $${params.length}`; }
+  const since = periodStart(new URL(c.req.url).searchParams.get("period"));
+  if (since) { params.push(since); sql += ` AND COALESCE(doc_date, created_at::date) >= $${params.length}`; }
   return json({ rows: await q(sql + ((DOC_TYPES as any)[c.params.type]?.own ? " ORDER BY ref_no DESC, id DESC" : " ORDER BY id DESC"), params) });
 });
 
@@ -624,6 +638,8 @@ route("GET", "/api/invoices", async (c) => {
   if (qs) { params.push(`%${qs}%`); sql += " AND (i.inv_no ILIKE $1 OR i.po_no ILIKE $1 OR cu.name ILIKE $1)"; }
   const seg = str(new URL(c.req.url).searchParams.get("segment"));
   if (seg) { params.push(segmentOf(seg)); sql += ` AND i.segment = $${params.length}`; }
+  const since = periodStart(new URL(c.req.url).searchParams.get("period"));
+  if (since) { params.push(since); sql += ` AND i.inv_date >= $${params.length}`; }
   const rows = await q(sql + " ORDER BY i.id DESC", params);
   if (c.perms.accounts !== "none") {
     const st = Object.fromEntries((await billStatus("in")).rows.map((r) => [r.id, r]));

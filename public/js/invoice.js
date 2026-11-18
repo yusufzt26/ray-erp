@@ -53,7 +53,7 @@ function billToFor(c) {
 import { linksPanel } from "./links.js";
 import { fitPages, pdfName } from "./printfit.js";
 import { payStatus } from "./links.js";
-import { segmentChoice, segmentFilter, segmentPill } from "./fields.js";
+import { periodFilter, segmentChoice, segmentFilter, segmentPill } from "./fields.js";
 
 // ---------------------------------------------------------------- pages
 export function invoicePages(ctx) {
@@ -61,13 +61,13 @@ export function invoicePages(ctx) {
 
   async function list() {
     const sp = new URLSearchParams(location.hash.split("?")[1] || "");
-    const qs = sp.get("q") || "", seg = sp.get("segment") || "";
-    const { rows } = await api("GET", "/api/invoices?" + new URLSearchParams({ q: qs, segment: seg }));
+    const qs = sp.get("q") || "", seg = sp.get("segment") || "", per = sp.get("period") || "";
+    const { rows } = await api("GET", "/api/invoices?" + new URLSearchParams({ q: qs, segment: seg, period: per }));
     layout(`
       <div class="head"><h1>Sales Invoices <small>(${rows.length})</small></h1>
         <div class="actions">${can("sales_invoice", "edit") ? '<a class="btn primary" href="#/invoices/new">＋ New Invoice</a>' : ""}</div></div>
       <form class="filters" id="flt"><input name="q" value="${h(qs)}" placeholder="Search invoice no, PO no or customer…">
-        ${segmentFilter(seg)}<button class="btn">Search</button></form>
+        ${periodFilter(per)}${segmentFilter(seg)}<button class="btn">Search</button></form>
       <div class="scroll"><table class="grid">
         <tr><th>Invoice No</th><th>Date</th><th>Customer</th><th>PO No</th><th class="num">Grand Total</th><th>Status</th>${rows.some((r) => r.pay_status) ? '<th>Payment</th><th class="num">Balance</th>' : ""}</tr>
         ${rows.map((r) => `<tr class="click ${r.status === "Cancelled" ? "inactive" : ""}" data-href="#/invoices/${r.id}"><td><b>${h(r.inv_no)}</b></td>

@@ -25,6 +25,10 @@ export const segmentPill = (seg) => (seg === "NPD" ? ' <span class="pill npd">NP
 export const segmentFilter = (seg) => `<select name="segment" onchange="this.form.requestSubmit()"><option value="">All types</option>${SEGMENTS.map(([v, l]) => `<option value="${v}" ${seg === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
 export const segmentChoice = (cur) => `<select name="segment">${SEGMENTS.map(([v, l]) => `<option value="${v}" ${(cur || "Regular") === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
 
+/** Date filter on document lists. "year" is the financial year (April to March). */
+export const PERIODS = [["", "All dates"], ["today", "Today"], ["week", "This week"], ["month", "This month"], ["year", "This financial year"]];
+export const periodFilter = (per) => `<select name="period" onchange="this.form.requestSubmit()" title="Show by date">${PERIODS.map(([v, l]) => `<option value="${v}" ${(per || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+
 export const BUILTIN_CATEGORIES = ["FG", "SA", "CP", "RM", "BO", "CN", "PK", "SV"];
 export const PRODUCT_CATEGORIES = {
   FG: "Finished Good (pipe / assembly)",
