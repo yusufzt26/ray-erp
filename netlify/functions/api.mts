@@ -1,7 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
-import { BUILTIN_CATEGORIES, CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, addCategories, coerce } from "../../public/js/fields.js";
+import { BUILTIN_CATEGORIES, CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, addCategories, coerce, gstTaxType, gstTotals } from "../../public/js/fields.js";
 import { clearCookie, makeSessionCookie, readSession } from "../lib/auth.mts";
 import { matchParty, matchProducts } from "../lib/match.mts";
 import { nextCode, one, pdfStore, q, tx } from "../lib/db.mts";
@@ -341,7 +341,7 @@ function periodStart(p: unknown): string | null {
 /** "10", "10 days", " 30 " -> 10; blank -> null. */
 const deliveryDays = (v: unknown) => { const m = String(v ?? "").match(/\d+/); return m ? Math.min(Number(m[0]), 999) : null; };
 const addDays = (iso: string, n: number) => { const t = new Date(iso + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
-const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, delivery_days, terms, subtotal, tax_amount, total_amount, notes, pdf_file, status, eway, segment, created_at";
+const DOC_COLS = "id, doc_type, parent_id, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, party_id, party_name, party_gstin, to_char(delivery_date, 'YYYY-MM-DD') AS delivery_date, delivery_days, terms, subtotal, tax_amount, tax_type, cgst, sgst, igst, total_amount, notes, pdf_file, status, eway, segment, created_at";
 
 route("GET", "/api/d/:type", async (c) => {
   docTypeOf(c.params.type);
@@ -370,13 +370,13 @@ route("GET", "/api/d/:type/lines", async (c) => {
 route("GET", "/api/d/:type/options", async (c) => {
   const d = docTypeOf(c.params.type);
   require(c, c.params.type);
-  const parties = await q(`SELECT id, code, name, gstin FROM ${d.partyTable} WHERE active = 1 ORDER BY name`);
-  const products = await q(`SELECT id, code, name, customer_part_no, drawing_no, sellable, purchasable, uom, hsn, sale_rate, purchase_rate
+  const parties = await q(`SELECT id, code, name, gstin, state FROM ${d.partyTable} WHERE active = 1 ORDER BY name`);
+  const products = await q(`SELECT id, code, name, customer_part_no, drawing_no, sellable, purchasable, uom, hsn, sale_rate, purchase_rate, gst_rate
     FROM products WHERE active = 1 ORDER BY (CASE WHEN ${d.productFlag} = 1 THEN 0 ELSE 1 END), code`);
   // Lines typed on earlier documents of the same side (quotations often have no item code), newest first, for type-ahead.
   const sameSide = Object.entries(DOC_TYPES).filter(([, x]: any) => x.side === (d as any).side).map(([k]) => k);
   const recent = await q(`SELECT * FROM (SELECT DISTINCT ON (LOWER(COALESCE(l.description, '')), LOWER(COALESCE(l.party_part_no, '')))
-      l.party_part_no, l.description, l.hsn, l.uom, l.rate, d.id AS doc_id
+      l.party_part_no, l.description, l.hsn, l.uom, l.rate, l.gst_rate, d.id AS doc_id
       FROM document_lines l JOIN documents d ON d.id = l.document_id
       WHERE d.doc_type = ANY($1) AND d.status <> 'Cancelled' AND COALESCE(l.description, l.party_part_no, '') <> ''
       ORDER BY LOWER(COALESCE(l.description, '')), LOWER(COALESCE(l.party_part_no, '')), d.id DESC) t ORDER BY doc_id DESC LIMIT 1000`, [sameSide]);
@@ -394,7 +394,8 @@ route("GET", "/api/d/:type/:id", async (c) => {
   require(c, c.params.type);
   const doc = await one(`SELECT ${DOC_COLS} FROM documents WHERE id = $1 AND doc_type = $2`, [Number(c.params.id), c.params.type]);
   if (!doc) fail(404, "Not found");
-  const lines = await q("SELECT * FROM document_lines WHERE document_id = $1 ORDER BY line_no", [doc.id]);
+  const lines = await q(`SELECT l.*, COALESCE(l.gst_rate, p.gst_rate) AS gst_rate FROM document_lines l
+    LEFT JOIN products p ON p.id = l.product_id WHERE l.document_id = $1 ORDER BY l.line_no`, [doc.id]);
   return json({ doc, lines });
 });
 
@@ -425,9 +426,10 @@ route("POST", "/api/d/:type/save", async (c) => {
       partyId = created.id;
       messages.push(`New ${d.partyLabel.toLowerCase()} ${created.code} - ${partyName} added to the master.`);
     }
+    let partyState = "";
     if (partyId) {
-      const p = (await query(`SELECT name, gstin FROM ${d.partyTable} WHERE id = $1`, [partyId]))[0];
-      if (p) { partyName = p.name; partyGstin ||= p.gstin || ""; } else partyId = null;
+      const p = (await query(`SELECT name, gstin, state FROM ${d.partyTable} WHERE id = $1`, [partyId]))[0];
+      if (p) { partyName = p.name; partyGstin ||= p.gstin || ""; partyState = p.state || ""; } else partyId = null;
     }
     if ((!str(b.doc_no) && !d.own) || !partyName) fail(400, `${d.own ? "" : d.noLabel + " and "}${d.partyLabel} ${d.own ? "is" : "are"} required.`);
 
@@ -452,17 +454,26 @@ route("POST", "/api/d/:type/save", async (c) => {
         pid = created.id;
         messages.push(`New product ${created.code} - ${values.name} added to the product list.`);
       }
-      lines.push([pid, part, desc, str(l.hsn), qty, str(l.uom).toUpperCase(), rate, amount]);
+      let gstRate = num(l.gst_rate);
+      if (gstRate === null && pid) gstRate = num((await query("SELECT gst_rate FROM products WHERE id = $1", [pid]))[0]?.gst_rate);
+      if (gstRate !== null && (gstRate < 0 || gstRate > 100)) fail(400, `Line "${desc || part}": GST % must be between 0 and 100.`);
+      lines.push([pid, part, desc, str(l.hsn), qty, str(l.uom).toUpperCase(), rate, amount, gstRate ?? 18]);
     }
     const subtotal = Math.round(lines.reduce((s, l) => s + (l[7] || 0), 0) * 100) / 100;
-    const total = num(b.total_amount) ?? subtotal;
+    // GST: same state as us = CGST + SGST, other state = IGST; amounts worked out per line rate unless typed.
+    const settingsNow = Object.fromEntries((await query("SELECT key, value FROM settings WHERE key IN ('company_gstin', 'company_state')")).map((r: any) => [r.key, r.value]));
+    const taxType = b.tax_type === "IGST" || b.tax_type === "CGST_SGST" ? b.tax_type : gstTaxType(settingsNow, partyGstin, partyState);
+    const auto = gstTotals(lines.map((l) => ({ amount: l[7], gst_rate: l[8] })), taxType);
+    const typedTax = (k: string) => (num(b[k]) === null ? (auto as any)[k] : Math.round(num(b[k])! * 100) / 100);
+    const cgst = taxType === "IGST" ? 0 : typedTax("cgst"), sgst = taxType === "IGST" ? 0 : typedTax("sgst"), igst = taxType === "IGST" ? typedTax("igst") : 0;
+    const total = num(b.total_amount) ?? Math.round((subtotal + cgst + sgst + igst) * 100) / 100;
     const header = {
       doc_no: str(b.doc_no), doc_date: isoDate(b.doc_date), party_id: partyId, party_name: partyName, party_gstin: partyGstin,
       delivery_days: deliveryDays(b.delivery_days),
       terms: type === "quotation" || type === "purchase_order" ? str(b.terms).slice(0, 4000) || null : null,
       delivery_date: deliveryDays(b.delivery_days) !== null && type !== "quotation"
         ? addDays(isoDate(b.doc_date) || todayIso(), deliveryDays(b.delivery_days)!) : isoDate(b.delivery_date),
-      subtotal, tax_amount: total ? Math.round((total - subtotal) * 100) / 100 : null,
+      subtotal, tax_amount: total ? Math.round((total - subtotal) * 100) / 100 : null, tax_type: taxType, cgst, sgst, igst,
       total_amount: total, notes: str(b.notes), status: d.statuses.includes(b.status) ? b.status : d.statuses[0],
       segment: segmentOf(b.segment),
     };
@@ -498,8 +509,8 @@ route("POST", "/api/d/:type/save", async (c) => {
         Object.values(all)))[0].id;
     }
     for (let i = 0; i < lines.length; i++)
-      await query(`INSERT INTO document_lines (document_id, line_no, product_id, party_part_no, description, hsn, qty, uom, rate, amount)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, [id, i + 1, ...lines[i]]);
+      await query(`INSERT INTO document_lines (document_id, line_no, product_id, party_part_no, description, hsn, qty, uom, rate, amount, gst_rate)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, [id, i + 1, ...lines[i]]);
     const parentId = (await query("SELECT parent_id FROM documents WHERE id = $1", [id]))[0]?.parent_id;
     if (parentId) await refreshStatus(query, parentId);
     return { id, ref_no: refNo };
@@ -666,7 +677,7 @@ route("GET", "/api/invoices/from-doc/:id", async (c) => {
   const ids = prog.lines.map((l: any) => l.product_id).filter(Boolean);
   const prods = ids.length ? await q("SELECT id, drawing_no, customer_part_no, code AS item_code, gst_rate FROM products WHERE id = ANY($1)", [ids]) : [];
   const pmap = Object.fromEntries(prods.map((p) => [p.id, p]));
-  const lines = prog.lines.filter((l: any) => l.pending > 0).map((l: any) => ({ ...l, ...(pmap[l.product_id] || {}), qty: l.pending }));
+  const lines = prog.lines.filter((l: any) => l.pending > 0).map((l: any) => ({ ...l, ...(pmap[l.product_id] || {}), gst_rate: l.gst_rate ?? pmap[l.product_id]?.gst_rate ?? null, qty: l.pending }));
   if (!lines.length) fail(400, "Everything on this document has already been invoiced.");
   return json({ segment: src.segment || po?.segment || "Regular", po: po || { ...src, doc_no: "", doc_date: null, id: null }, lines, challan: src.doc_type === "delivery_challan" ? { id: src.id, ref_no: src.ref_no } : null, party_id: src.party_id });
 });
@@ -702,18 +713,18 @@ route("POST", "/api/invoices/save", async (c) => {
     if (!str(l.description) && !qty) continue;
     if (!qty || rate === null) fail(400, `Line "${str(l.description) || "?"}": quantity and rate are needed.`);
     const amount = round2(qty! * rate! * (1 - disc / 100));
-    lines.push([num(l.product_id), str(l.material_code), str(l.part_no), str(l.description), str(l.hsn), str(l.uom).toUpperCase(), qty, rate, disc, amount]);
+    let lineRate = num(l.gst_rate) ?? num(b.gst_rate);
+    if (lineRate === null && num(l.product_id)) lineRate = num((await one("SELECT gst_rate FROM products WHERE id = $1", [num(l.product_id)]))?.gst_rate);
+    if (lineRate !== null && (lineRate < 0 || lineRate > 100)) fail(400, `Line "${str(l.description)}": GST % must be between 0 and 100.`);
+    lines.push([num(l.product_id), str(l.material_code), str(l.part_no), str(l.description), str(l.hsn), str(l.uom).toUpperCase(), qty, rate, disc, amount, lineRate ?? 18]);
   }
   if (!lines.length) fail(400, "Add at least one item.");
-  const gstRate = num(b.gst_rate) ?? 18;
-  const ownState = ((await one("SELECT value FROM settings WHERE key = 'company_gstin'"))?.value || "27").slice(0, 2);
-  const custState = str(b.gstin || cust.gstin).slice(0, 2);
-  const taxType = b.tax_type === "CGST_SGST" || b.tax_type === "IGST" ? b.tax_type : custState && custState !== ownState ? "IGST" : "CGST_SGST";
-  const subtotal = round2(lines.reduce((s, l) => s + l[9], 0));
-  const igst = taxType === "IGST" ? round2(subtotal * gstRate / 100) : 0;
-  const cgst = taxType === "IGST" ? 0 : round2(subtotal * gstRate / 200);
-  const sgst = cgst;
-  const total = round2(subtotal + igst + cgst + sgst);
+  const settingsNow = Object.fromEntries((await q("SELECT key, value FROM settings WHERE key IN ('company_gstin', 'company_state')")).map((r: any) => [r.key, r.value]));
+  const taxType = b.tax_type === "CGST_SGST" || b.tax_type === "IGST" ? b.tax_type : gstTaxType(settingsNow, str(b.gstin) || cust.gstin, cust.state);
+  const g = gstTotals(lines.map((l) => ({ amount: l[9], gst_rate: l[10] })), taxType);
+  const gstRate = g.rates.length === 1 ? g.rates[0] : Math.max(18, ...g.rates); // one rate for the header; lines keep their own
+  const subtotal = g.taxable, igst = g.igst, cgst = g.cgst, sgst = g.sgst;
+  const total = g.total;
   const packing = (Array.isArray(b.packing) ? b.packing : []).slice(0, 200)
     .map((p: any) => ({ line: num(p.line), qty: num(p.qty) })).filter((p: any) => p.line && p.qty);
   const header: any = {
@@ -739,8 +750,8 @@ route("POST", "/api/invoices/save", async (c) => {
       invId = (await query(`INSERT INTO invoices (${ks.join(", ")}) VALUES (${ks.map((_, i) => `$${i + 1}`).join(", ")}) RETURNING id`, Object.values(all)))[0].id;
     }
     for (let i = 0; i < lines.length; i++)
-      await query(`INSERT INTO invoice_lines (invoice_id, line_no, product_id, material_code, part_no, description, hsn, uom, qty, rate, disc, amount)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [invId, i + 1, ...lines[i]]);
+      await query(`INSERT INTO invoice_lines (invoice_id, line_no, product_id, material_code, part_no, description, hsn, uom, qty, rate, disc, amount, gst_rate)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [invId, i + 1, ...lines[i]]);
     if (header.customer_po_id && ["Open", "Partly Dispatched", "Completed"].includes(b.po_status))
       await query("UPDATE documents SET status = $1 WHERE id = $2 AND doc_type = 'customer_po'", [b.po_status, header.customer_po_id]);
     else if (header.customer_po_id) await refreshStatus(query, header.customer_po_id);

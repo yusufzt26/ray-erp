@@ -66,10 +66,10 @@ export function buildEway(kind, rec, s, e) {
 
   // Tax: an invoice carries its own; a challan for supply works it out, other challans carry no tax.
   const sameState = ourState && toState && ourState === toState;
-  const igstMode = isInv ? doc.tax_type === "IGST" : !sameState;
+  const igstMode = isInv || doc.tax_type ? doc.tax_type === "IGST" : !sameState;
   const taxable = isInv || reason === 1;
   const items = lines.filter((l) => Number(l.qty) || Number(l.amount)).map((l, i) => {
-    const rate = !taxable ? 0 : isInv ? Number(doc.gst_rate || 0) : Number(l.product_gst ?? 18);
+    const rate = !taxable ? 0 : isInv ? Number(l.gst_rate ?? doc.gst_rate ?? 0) : Number(l.gst_rate ?? l.product_gst ?? 18);
     const amt = r2(l.amount ?? Number(l.qty || 0) * Number(l.rate || 0));
     const hsn = String(l.hsn || "").replace(/\D/g, "");
     if (!hsn) problems.push(`Line ${i + 1} (${l.description || l.part_no || "item"}) has no HSN code.`);

@@ -505,6 +505,50 @@ ok(true, "store can make stock entries");
 // accounts user: payments, bank and invoices; orders read-only; no user admin
 await p.click("#logout"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin123"); await p.click("button"); await p.waitForSelector("text=Welcome");
+// GST worked out automatically: CGST + SGST in our state, IGST for another state, per-line rate, typed amounts kept
+{
+  await p.goto(U + "/#/d/purchase_order/new"); await p.waitForSelector("#party_id"); await p.waitForTimeout(500);
+  await p.selectOption("#party_id", { index: 1 });
+  await p.fill("#party_gstin", "27AAACP1234F1Z5"); await p.dispatchEvent("#party_gstin", "input");
+  await p.fill("#lines tr:first-child [name=description]", "Tube FLX 9X7/PA12 Black"); await p.keyboard.press("Escape");
+  await p.fill("#lines tr:first-child [name=qty]", "10000"); await p.fill("#lines tr:first-child [name=rate]", "36.4");
+  await p.dispatchEvent("#lines tr:first-child [name=rate]", "change");
+  await p.fill("#lines tr:first-child [name=gst_rate]", "18"); await p.dispatchEvent("#lines tr:first-child [name=gst_rate]", "input");
+  ok(await p.inputValue("#cgst") === "32760.00" && await p.inputValue("#sgst") === "32760.00" && await p.isHidden("#igst"), "same state: CGST + SGST 9% each worked out");
+  ok(await p.inputValue("#total_amount") === "429520.00", "PO total = taxable + GST, no typing needed");
+  await p.fill("#party_gstin", "24AAACP1234F1Z5"); await p.dispatchEvent("#party_gstin", "input");
+  ok(await p.inputValue("#igst") === "65520.00" && await p.isHidden("#cgst"), "other state GSTIN switches to IGST 18%");
+  ok((await p.textContent("#gst_why")).includes("Gujarat"), "shows why: other state named");
+  await p.click("#addline");
+  await p.fill("#lines tr:nth-child(2) [name=description]", "Testing charges"); await p.keyboard.press("Escape");
+  await p.fill("#lines tr:nth-child(2) [name=amount]", "1000"); await p.dispatchEvent("#lines tr:nth-child(2) [name=amount]", "input");
+  await p.fill("#lines tr:nth-child(2) [name=gst_rate]", "12"); await p.dispatchEvent("#lines tr:nth-child(2) [name=gst_rate]", "input");
+  ok(await p.inputValue("#igst") === "65640.00" && await p.inputValue("#total_amount") === "430640.00", "each line taxed at its own GST %");
+  await p.fill("#igst", "65640.40"); await p.dispatchEvent("#igst", "input");
+  ok(await p.inputValue("#total_amount") === "430640.40" && await p.isVisible("#regst"), "typed IGST kept and total follows");
+  await p.click("button:has-text('Save Purchase Order')"); await p.waitForSelector("text=saved");
+  const gid = Number(p.url().split("/").pop());
+  const saved = (await getJ("/api/d/purchase_order/" + gid)).doc;
+  ok(saved.tax_type === "IGST" && Number(saved.igst) === 65640.4 && Number(saved.total_amount) === 430640.4 && Number(saved.cgst) === 0, "PO saved with IGST split");
+  await p.waitForTimeout(800);
+  ok(await p.inputValue("#igst") === "65640.40" && await p.isVisible("#regst"), "reopened PO keeps the typed IGST");
+  await p.goto(U + `/#/d/purchase_order/${gid}/print`); await p.waitForSelector(".print-area");
+  const pt = await p.textContent(".print-area");
+  ok(pt.includes("IGST") && pt.includes("65,640.40") && pt.includes("Taxable value"), "PO print shows taxable value and IGST");
+  await p.screenshot({ path: join(SHOTS, "po_gst_print.png"), fullPage: true });
+  // sales invoice: line GST % from the item, CGST + SGST for our state
+  await p.goto(U + "/#/invoices/new"); await p.waitForSelector("#customer_id"); await p.waitForTimeout(500);
+  await p.selectOption("#customer_id", { index: 1 });
+  await p.fill("[name=gstin]", "27AABCA1234B1Z5"); await p.dispatchEvent("[name=gstin]", "input");
+  await p.fill("#lines tr:first-child [name=description]", "Fuel line"); await p.fill("#lines tr:first-child [name=qty]", "10");
+  await p.fill("#lines tr:first-child [name=rate]", "100"); await p.fill("#lines tr:first-child [name=gst_rate]", "28");
+  await p.dispatchEvent("#lines tr:first-child [name=gst_rate]", "input");
+  const sum = await p.textContent("#sum");
+  ok(sum.includes("CGST") && sum.includes("14%") && sum.includes("140.00") && sum.includes("1,280.00"), "invoice uses the line's GST %: CGST 14% + SGST 14%");
+  await p.screenshot({ path: join(SHOTS, "invoice_gst.png"), fullPage: true });
+  await p.goto(U + "/#/d/purchase_order/" + gid); await p.waitForSelector("#igst");
+  await p.screenshot({ path: join(SHOTS, "po_gst.png"), fullPage: true });
+}
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "priya.accounts"); await p.fill("[name=full_name]", "Priya"); await p.selectOption("[name=role]", "Accounts");
 await p.fill("[name=password]", "secret2"); await p.click("button.primary"); await p.waitForSelector("text=User saved");

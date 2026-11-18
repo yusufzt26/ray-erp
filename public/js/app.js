@@ -1,4 +1,4 @@
-import { CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, addCategories, periodFilter, segmentChoice, segmentFilter, segmentPill } from "./fields.js";
+import { CONVERT, DOC_TYPES, GST_STATE_CODES, LEVELS, MASTERS, MODULES, PRODUCT_CATEGORIES, ROLES, addCategories, gstStateCode, gstTaxType, gstTotals, periodFilter, segmentChoice, segmentFilter, segmentPill } from "./fields.js";
 import { imageToCanvas, readImage, readPdf, readScannedPdf, readSheet } from "./pdfread.js";
 import { invoicePages } from "./invoice.js";
 import { morePages } from "./more.js";
@@ -543,6 +543,7 @@ function lineRow(l, products, flag, type) {
     <td><input name="uom" value="${h(l.uom)}"></td>
     <td><input name="rate" value="${numStr(l.rate)}" inputmode="decimal"></td>
     <td><input name="amount" value="${l.amount === null || l.amount === undefined || l.amount === "" ? "" : Number(l.amount).toFixed(2)}" inputmode="decimal"></td>
+    <td><input name="gst_rate" class="gstpct" value="${l.gst_rate === null || l.gst_rate === undefined || l.gst_rate === "" ? 18 : numStr(l.gst_rate)}" inputmode="decimal" title="GST % for this line"></td>
     <td ${type === "quotation" ? "hidden" : ""}><span class="newbox" ${l.product_id ? "hidden" : ""}><label class="check inline"><input type="checkbox" name="create" ${l.create_product ? "checked" : ""}> create</label>
       <select name="category" title="Category for the new item code">${Object.keys(PRODUCT_CATEGORIES).map((k) => `<option ${k === defCat ? "selected" : ""}>${k}</option>`).join("")}</select></span></td>
     <td><button type="button" class="rm" title="Remove line">✕</button></td></tr>`;
@@ -616,13 +617,20 @@ pages.docForm = async (type, id, preset = null) => {
         ${srcUrl && !found ? `<a href="${srcUrl}">⬇ Download the original Excel file</a>` : ""}</div>` : ""}
       <div class="card items"><fieldset ${editable ? "" : "disabled"}>
         <h2>Items</h2>
-        <div class="scroll"><table class="lines"><thead><tr><th>#</th><th ${type === "quotation" ? "hidden" : ""}>Our item</th><th>Part No</th><th>Description</th><th>HSN</th><th>Qty</th><th>UOM</th><th>Rate</th><th>Amount</th><th ${type === "quotation" ? "hidden" : ""}>New product?</th><th></th></tr></thead>
+        <div class="scroll"><table class="lines"><thead><tr><th>#</th><th ${type === "quotation" ? "hidden" : ""}>Our item</th><th>Part No</th><th>Description</th><th>HSN</th><th>Qty</th><th>UOM</th><th>Rate</th><th>Amount</th><th>GST %</th><th ${type === "quotation" ? "hidden" : ""}>New product?</th><th></th></tr></thead>
           <tbody id="lines">${lines.map((l) => lineRow(l, products, flag, type)).join("")}</tbody></table></div>
         ${editable ? '<button type="button" class="btn small" id="addline">＋ Add line</button>' : ""}
-        <div class="totals">
-          <div>Items total: <b id="subtotal">0.00</b></div>
-          <label>Document total (incl. tax)<input name="total_amount" id="total_amount" inputmode="decimal" value="${doc.total_amount === null || doc.total_amount === undefined ? "" : Number(doc.total_amount).toFixed(2)}" class="${cls(found?.total)}"></label>
-          <div>Tax / other: <b id="taxdiff">0.00</b></div>
+        <div class="totals gsttot">
+          <div>Taxable value: <b id="subtotal">0.00</b></div>
+          <label>GST type<select name="tax_type" id="tax_type"><option value="">Auto</option>
+            <option value="CGST_SGST" ${doc.tax_type === "CGST_SGST" ? "selected" : ""}>CGST + SGST (same state)</option>
+            <option value="IGST" ${doc.tax_type === "IGST" ? "selected" : ""}>IGST (other state)</option></select>
+            <small id="gst_why"></small></label>
+          <label class="tx cs">CGST <small class="pct"></small><input name="cgst" id="cgst" inputmode="decimal"></label>
+          <label class="tx cs">SGST <small class="pct"></small><input name="sgst" id="sgst" inputmode="decimal"></label>
+          <label class="tx ig">IGST <small class="pct"></small><input name="igst" id="igst" inputmode="decimal"></label>
+          <label>Document total (incl. GST)<input name="total_amount" id="total_amount" inputmode="decimal" value="${doc.total_amount === null || doc.total_amount === undefined ? "" : Number(doc.total_amount).toFixed(2)}" class="${cls(found?.total)}"></label>
+          <div class="gstnote"><small id="taxdiff"></small> ${editable ? '<button type="button" class="btn small" id="regst" hidden>↺ Recalculate GST</button>' : ""}</div>
         </div>
         ${type === "quotation" || type === "purchase_order" ? `<label class="full">Terms &amp; conditions <small>(printed on this ${type === "quotation" ? "quotation" : "PO"}; the default comes from Company Settings)</small>
           <textarea name="terms" rows="4">${h(doc.terms || (type === "quotation" ? S.settings.quotation_terms || S.settings.invoice_terms : S.settings.po_terms) || "")}</textarea></label>` : ""}
@@ -659,11 +667,49 @@ pages.docForm = async (type, id, preset = null) => {
 
   const tbody = $("#lines");
   const renumber = () => { $$("tr", tbody).forEach((r, i) => ($(".ln", r).textContent = i + 1)); recalc(); };
+  // GST: worked out from each line's GST % and the party's state (GSTIN, or State in the master).
+  // A typed tax amount or total is kept until "Recalculate GST" is pressed.
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const ownCode = gstStateCode(S.settings.company_gstin, S.settings.company_state) || 27;
+  const stateName = (code) => (Object.keys(GST_STATE_CODES).find((k) => GST_STATE_CODES[k] === code) || "").replace(/\b\w/g, (c) => c.toUpperCase());
+  const partyState = () => parties.find((p) => String(p.id) === $("#party_id").value)?.state || "";
+  const autoType = () => gstTaxType(S.settings, $("#party_gstin").value, partyState());
+  const taxTypeNow = () => $("#tax_type").value || autoType();
+  const gstNow = () => gstTotals($$("tr", tbody).map((r) => ({ amount: $("[name=amount]", r).value, gst_rate: $("[name=gst_rate]", r).value })), taxTypeNow());
+  let manualTax = false, manualTotal = !!(found && found.total && doc.total_amount);
+  if (doc.id && doc.tax_type) {
+    // A saved document keeps its amounts; they count as typed if they differ from what the lines give now.
+    if (doc.tax_type === autoType()) $("#tax_type").value = "";
+    const g = gstNow();
+    const saved = { cgst: Number(doc.cgst || 0), sgst: Number(doc.sgst || 0), igst: Number(doc.igst || 0) };
+    ["cgst", "sgst", "igst"].forEach((k) => ($(`#${k}`).value = saved[k].toFixed(2)));
+    const want = doc.tax_type === "IGST" ? { cgst: 0, sgst: 0, igst: g.igst } : { cgst: g.cgst, sgst: g.sgst, igst: 0 };
+    manualTax = ["cgst", "sgst", "igst"].some((k) => Math.abs(saved[k] - want[k]) > 0.005);
+    manualTotal = doc.total_amount !== null && Math.abs(Number(doc.total_amount) - r2(g.taxable + saved.cgst + saved.sgst + saved.igst)) > 0.005;
+  } else if (doc.id && doc.total_amount) manualTotal = Math.abs(Number(doc.total_amount) - gstNow().total) > 0.005;
   const recalc = () => {
-    const s = $$("[name=amount]", tbody).reduce((a, i) => a + num(i.value), 0);
-    const t = num($("#total_amount").value);
-    $("#subtotal").textContent = money(s);
-    $("#taxdiff").textContent = money(t ? t - s : 0);
+    const tt = taxTypeNow(), g = gstNow();
+    const other = gstStateCode($("#party_gstin").value, partyState());
+    $("#gst_why").textContent = $("#tax_type").value ? "Chosen by hand"
+      : other ? `${stateName(ownCode) || ownCode} to ${stateName(other) || other}: ${other === ownCode ? "same state" : "other state"}`
+      : "Party state not known: taken as same state";
+    $("#tax_type").options[0].textContent = `Auto: ${autoType() === "IGST" ? "IGST" : "CGST + SGST"}`;
+    $$(".tx.cs").forEach((x) => (x.hidden = tt === "IGST"));
+    $$(".tx.ig").forEach((x) => (x.hidden = tt !== "IGST"));
+    const pct = g.rates.length === 1 ? g.rates[0] : null;
+    $$(".tx.cs .pct").forEach((x) => (x.textContent = pct !== null ? `${pct / 2}%` : ""));
+    $(".tx.ig .pct").textContent = pct !== null ? `${pct}%` : "";
+    if (!manualTax) {
+      $("#cgst").value = (tt === "IGST" ? 0 : g.cgst).toFixed(2);
+      $("#sgst").value = (tt === "IGST" ? 0 : g.sgst).toFixed(2);
+      $("#igst").value = (tt === "IGST" ? g.igst : 0).toFixed(2);
+    }
+    const tax = tt === "IGST" ? num($("#igst").value) : num($("#cgst").value) + num($("#sgst").value);
+    if (!manualTotal) $("#total_amount").value = r2(g.taxable + tax).toFixed(2);
+    $("#subtotal").textContent = money(g.taxable);
+    const diff = r2(num($("#total_amount").value) - g.taxable - tax);
+    $("#taxdiff").textContent = Math.abs(diff) >= 0.01 ? `Total differs from taxable + GST by ${money(diff)} (round off or other charges)` : "";
+    if ($("#regst")) $("#regst").hidden = !manualTax && !manualTotal;
   };
   const addLine = () => { tbody.insertAdjacentHTML("beforeend", lineRow({}, products, flag, type)); renumber(); };
   if ($("#addline")) $("#addline").onclick = addLine;
@@ -680,6 +726,7 @@ pages.docForm = async (type, id, preset = null) => {
         if (!f("hsn").value) f("hsn").value = p.hsn || "";
         const rate = d.side === "sales" ? p.sale_rate : p.purchase_rate;
         if (!f("rate").value && rate) f("rate").value = rate;
+        if (p.gst_rate !== null && p.gst_rate !== undefined && p.gst_rate !== "") f("gst_rate").value = numStr(p.gst_rate);
         f("create").checked = false;
       }
       $(".newbox", r).hidden = !!p;
@@ -688,7 +735,7 @@ pages.docForm = async (type, id, preset = null) => {
       f("amount").value = (num(f("qty").value) * num(f("rate").value)).toFixed(2);
     recalc();
   });
-  tbody.addEventListener("input", (e) => e.target.name === "amount" && recalc());
+  tbody.addEventListener("input", (e) => ["amount", "gst_rate"].includes(e.target.name) && recalc());
   if (editable) attachSuggest(tbody, {
     products, recent, rateKey: d.side === "sales" ? "sale_rate" : "purchase_rate",
     onPick: (r, o) => {
@@ -698,16 +745,24 @@ pages.docForm = async (type, id, preset = null) => {
       if (o.hsn) f("hsn").value = o.hsn;
       if (o.uom) f("uom").value = o.uom;
       if (o.rate && !f("rate").value) f("rate").value = o.rate;
+      if (o.gst !== null && o.gst !== undefined && o.gst !== "") f("gst_rate").value = numStr(o.gst);
       if (o.id && type !== "quotation") f("product_id").value = String(o.id);
       (o.id && type !== "quotation" ? f("product_id") : f("rate")).dispatchEvent(new Event("change", { bubbles: true }));
       f("qty").focus();
     },
   });
-  $("#total_amount").addEventListener("input", recalc);
+  $("#total_amount").addEventListener("input", () => { manualTotal = true; recalc(); });
+  $("#cgst").addEventListener("input", () => { manualTax = true; $("#sgst").value = $("#cgst").value; recalc(); });
+  $("#sgst").addEventListener("input", () => { manualTax = true; recalc(); });
+  $("#igst").addEventListener("input", () => { manualTax = true; recalc(); });
+  $("#tax_type").addEventListener("change", () => { manualTax = false; recalc(); });
+  $("#party_gstin").addEventListener("input", recalc);
+  if ($("#regst")) $("#regst").onclick = () => { manualTax = manualTotal = false; recalc(); };
   $("#party_id").onchange = (e) => {
     const o = e.target.selectedOptions[0];
     $("#create_party_box").hidden = !!e.target.value;
     if (e.target.value) { $("#party_name").value = o.dataset.name; if (o.dataset.gstin) $("#party_gstin").value = o.dataset.gstin; }
+    recalc();
   };
   if ($("[name=delivery_days]")) $("[name=delivery_days]").addEventListener("input", (e) => { e.target.value = e.target.value.replace(/\D/g, ""); });
   if (type === "purchase_order" && $("[name=delivery_days]")) {
@@ -726,7 +781,7 @@ pages.docForm = async (type, id, preset = null) => {
   $("#f").onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const body = Object.fromEntries(["party_id", "party_name", "party_gstin", "doc_no", "doc_date", "delivery_date", "delivery_days", "terms", "status", "segment", "total_amount", "notes"].map((k) => [k, fd.get(k)]));
+    const body = Object.fromEntries(["party_id", "party_name", "party_gstin", "doc_no", "doc_date", "delivery_date", "delivery_days", "terms", "status", "segment", "total_amount", "tax_type", "cgst", "sgst", "igst", "notes"].map((k) => [k, fd.get(k)]));
     body.create_party = fd.has("create_party");
     body.parent_id = doc.parent_id || null;
     body.id = doc.id || null;
@@ -734,7 +789,7 @@ pages.docForm = async (type, id, preset = null) => {
     body.lines = $$("tr", tbody).map((r) => ({
       product_id: $("[name=product_id]", r).value, party_part_no: $("[name=party_part_no]", r).value,
       description: $("[name=description]", r).value, hsn: $("[name=hsn]", r).value, qty: $("[name=qty]", r).value,
-      uom: $("[name=uom]", r).value, rate: $("[name=rate]", r).value, amount: $("[name=amount]", r).value,
+      uom: $("[name=uom]", r).value, rate: $("[name=rate]", r).value, amount: $("[name=amount]", r).value, gst_rate: $("[name=gst_rate]", r).value,
       create: type !== "quotation" && !$(".newbox", r).hidden && $("[name=create]", r).checked, category: $("[name=category]", r).value,
     }));
     const btn = e.submitter;

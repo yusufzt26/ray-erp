@@ -38,10 +38,8 @@ export function amountInWords(amount) {
 }
 
 export function computeTotals(lines, gstRate, taxType) {
-  const sub = round2(lines.reduce((s, l) => s + num(l.amount), 0));
-  const igst = taxType === "IGST" ? round2((sub * gstRate) / 100) : 0;
-  const cgst = taxType === "IGST" ? 0 : round2((sub * gstRate) / 200);
-  return { subtotal: sub, igst, cgst, sgst: cgst, total: round2(sub + igst + 2 * cgst) };
+  const g = gstTotals(lines.map((l) => ({ amount: l.amount, gst_rate: l.gst_rate ?? gstRate })), taxType);
+  return { subtotal: g.taxable, igst: g.igst, cgst: g.cgst, sgst: g.sgst, total: g.total, rates: g.rates };
 }
 
 function billToFor(c) {
@@ -53,7 +51,7 @@ function billToFor(c) {
 import { linksPanel } from "./links.js";
 import { fitPages, pdfName } from "./printfit.js";
 import { payStatus } from "./links.js";
-import { periodFilter, segmentChoice, segmentFilter, segmentPill } from "./fields.js";
+import { gstStateCode, gstTaxType, gstTotals, periodFilter, segmentChoice, segmentFilter, segmentPill } from "./fields.js";
 
 // ---------------------------------------------------------------- pages
 export function invoicePages(ctx) {
@@ -78,7 +76,7 @@ export function invoicePages(ctx) {
     $("#flt").onsubmit = (e) => { e.preventDefault(); location.hash = "#/invoices?" + new URLSearchParams(new FormData(e.target)); };
   }
 
-  function lineRow(l, products) {
+  function lineRow(l, products, gst) {
     return `<tr>
       <td class="ln"></td>
       <td><select name="product_id" class="prod"><option value="">— pick item —</option>
@@ -92,6 +90,7 @@ export function invoicePages(ctx) {
       <td><input name="rate" value="${l.rate ?? ""}" inputmode="decimal"></td>
       <td><input name="disc" value="${l.disc ?? 0}" inputmode="decimal"></td>
       <td class="num amt">${money(l.amount)}</td>
+      <td><input name="gst_rate" class="gstpct" value="${l.gst_rate ?? gst ?? 18}" inputmode="decimal" title="GST % for this line"></td>
       <td><button type="button" class="rm" title="Remove line">✕</button></td></tr>`;
   }
 
@@ -143,16 +142,16 @@ export function invoicePages(ctx) {
       </div>
       <div class="card">
         <h2>Items</h2>
-        <div class="scroll"><table class="lines inv-lines"><thead><tr><th>#</th><th>Item</th><th>Material Code</th><th>Description</th><th>Part No</th><th>HSN</th><th>UOM</th><th>Qty</th><th>Rate</th><th>Disc %</th><th class="num">Amount</th><th></th></tr></thead>
-          <tbody id="lines">${lines.map((l) => lineRow(l, products)).join("")}</tbody></table></div>
+        <div class="scroll"><table class="lines inv-lines"><thead><tr><th>#</th><th>Item</th><th>Material Code</th><th>Description</th><th>Part No</th><th>HSN</th><th>UOM</th><th>Qty</th><th>Rate</th><th>Disc %</th><th class="num">Amount</th><th>GST %</th><th></th></tr></thead>
+          <tbody id="lines">${lines.map((l) => lineRow(l, products, inv.gst_rate)).join("")}</tbody></table></div>
         ${ed ? '<button type="button" class="btn small" id="addline">＋ Add item</button>' : ""}
         <div class="inv-totals">
           <div class="form-grid">
-            <label>GST rate %<input name="gst_rate" id="gst_rate" value="${inv.gst_rate ?? 18}" inputmode="decimal"></label>
-            <label>Tax type<select name="tax_type" id="tax_type">
-              <option value="">Auto (from GSTIN)</option>
+            <label>GST type<select name="tax_type" id="tax_type">
+              <option value="">Auto (from GSTIN / state)</option>
               <option value="IGST" ${inv.tax_type === "IGST" && id ? "selected" : ""}>IGST (other state)</option>
-              <option value="CGST_SGST" ${inv.tax_type === "CGST_SGST" && id ? "selected" : ""}>CGST + SGST (Maharashtra)</option></select></label>
+              <option value="CGST_SGST" ${inv.tax_type === "CGST_SGST" && id ? "selected" : ""}>CGST + SGST (same state)</option></select>
+              <small id="gst_why"></small></label>
             <label>Delivery condition<input name="delivery_condition" value="${h(inv.delivery_condition)}"></label>
             <label>Payment terms<input name="payment_terms" value="${h(inv.payment_terms)}"></label>
           </div>
@@ -179,25 +178,22 @@ export function invoicePages(ctx) {
     const tbody = $("#lines"), boxes = $("#boxes");
     const customer = () => customers.find((c) => String(c.id) === $("#customer_id").value);
     const lineLabels = () => $$("tr", tbody).map((r, i) => `${i + 1}. ${$("[name=part_no]", r).value || $("[name=material_code]", r).value || $("[name=description]", r).value}`);
-    const taxType = () => {
-      const t = $("#tax_type").value;
-      if (t) return t;
-      const g = ($("[name=gstin]").value || "").slice(0, 2);
-      const own = (ctx.S.settings.company_gstin || "27").slice(0, 2);
-      return g && g !== own ? "IGST" : "CGST_SGST";
-    };
+    const autoType = () => gstTaxType(ctx.S.settings, $("[name=gstin]").value, customer()?.state);
+    const taxType = () => $("#tax_type").value || autoType();
     function recalc() {
       const ls = $$("tr", tbody).map((r) => {
         const amt = round2(num($("[name=qty]", r).value) * num($("[name=rate]", r).value) * (1 - num($("[name=disc]", r).value) / 100));
         $(".amt", r).textContent = money(amt);
-        return { amount: amt };
+        return { amount: amt, gst_rate: $("[name=gst_rate]", r).value };
       });
-      const rate = num($("#gst_rate").value);
-      const t = computeTotals(ls, rate, taxType());
+      const t = computeTotals(ls, 18, taxType());
+      const rate = t.rates.length === 1 ? t.rates[0] : null, half = rate === null ? "" : `${rate / 2}%`;
+      const other = gstStateCode($("[name=gstin]").value, customer()?.state);
+      $("#gst_why").textContent = $("#tax_type").value ? "Chosen by hand" : other ? (autoType() === "IGST" ? "Customer in another state: IGST" : "Customer in our state: CGST + SGST") : "Customer state not known: taken as same state";
       $("#sum").innerHTML = `
         <tr><td>Sub Total</td><td></td><td>${money(t.subtotal)}</td></tr>
-        ${taxType() === "IGST" ? `<tr><td>IGST</td><td>${rate}%</td><td>${money(t.igst)}</td></tr>`
-          : `<tr><td>CGST</td><td>${rate / 2}%</td><td>${money(t.cgst)}</td></tr><tr><td>SGST</td><td>${rate / 2}%</td><td>${money(t.sgst)}</td></tr>`}
+        ${taxType() === "IGST" ? `<tr><td>IGST</td><td>${rate === null ? "" : rate + "%"}</td><td>${money(t.igst)}</td></tr>`
+          : `<tr><td>CGST</td><td>${half}</td><td>${money(t.cgst)}</td></tr><tr><td>SGST</td><td>${half}</td><td>${money(t.sgst)}</td></tr>`}
         <tr class="grand"><td>GRAND TOTAL</td><td></td><td>₹ ${money(t.total)}</td></tr>
         <tr><td colspan="3" class="muted words">${amountInWords(t.total)}</td></tr>`;
       // keep box item dropdowns in step with the lines
@@ -215,7 +211,7 @@ export function invoicePages(ctx) {
         <td><input name="box_qty" value="${b.qty ?? ""}" inputmode="decimal"></td><td><button type="button" class="rm">✕</button></td></tr>`);
       renumberBoxes();
     };
-    if ($("#addline")) $("#addline").onclick = () => { tbody.insertAdjacentHTML("beforeend", lineRow({}, products)); renumber(); };
+    if ($("#addline")) $("#addline").onclick = () => { tbody.insertAdjacentHTML("beforeend", lineRow({}, products, 18)); renumber(); };
     if ($("#addbox")) $("#addbox").onclick = () => addBox();
     if ($("#autobox")) $("#autobox").onclick = () => {
       const per = num(prompt("How many pieces go in one box?", "1000"));
@@ -235,10 +231,10 @@ export function invoicePages(ctx) {
       if (!p) return;
       const set = (n, v) => { if (v !== null && v !== undefined && v !== "") $(`[name=${n}]`, r).value = v; };
       set("material_code", p.customer_part_no); set("description", p.name); set("part_no", p.drawing_no);
-      set("hsn", p.hsn); set("uom", p.uom); set("rate", p.sale_rate);
+      set("hsn", p.hsn); set("uom", p.uom); set("rate", p.sale_rate); set("gst_rate", p.gst_rate);
       recalc();
     });
-    ["#gst_rate", "#tax_type", "[name=gstin]"].forEach((s) => $(s).addEventListener("input", recalc));
+    ["#tax_type", "[name=gstin]"].forEach((s) => $(s).addEventListener("input", recalc));
     $("#tax_type").addEventListener("change", recalc);
     $("#customer_id").onchange = () => {
       const c = customer();
@@ -309,7 +305,7 @@ export function invoicePages(ctx) {
       gst_rate: rates.length && rates.every((r) => r === rates[0]) ? rates[0] : 18,
       _lines: lines.map((l) => ({
         product_id: l.product_id, material_code: l.party_part_no || l.customer_part_no || "", description: l.description,
-        part_no: l.drawing_no || "", hsn: l.hsn, uom: l.uom, qty: l.qty, rate: l.rate, disc: 0, amount: l.amount,
+        part_no: l.drawing_no || "", hsn: l.hsn, uom: l.uom, qty: l.qty, rate: l.rate, disc: 0, amount: l.amount, gst_rate: l.gst_rate ?? 18,
       })),
     };
   }
@@ -325,6 +321,8 @@ export function invoicePages(ctx) {
     for (let i = 0; i < pk.length; i += 2) pkRows.push([pk[i], pk[i + 1]]);
     const minRows = Math.max(0, 6 - lines.length);
     const igst = inv.tax_type === "IGST";
+    const rs = [...new Set(lines.map((l) => Number(l.gst_rate ?? inv.gst_rate)))], rt = rs.length === 1 ? rs[0] : null;
+    const pc = (x) => (rt === null ? "" : x + "%");
     return `<div class="inv-page">
     <table class="inv">
       <colgroup><col style="width:5%"><col style="width:11%"><col style="width:32%"><col style="width:9%"><col style="width:6%"><col style="width:8%"><col style="width:9%"><col style="width:5%"><col style="width:15%"></colgroup>
@@ -343,9 +341,9 @@ export function invoicePages(ctx) {
         <td class="c">${h(l.uom)}</td><td class="c">${qtyFmt(l.qty)}</td><td class="r">${money(l.rate)}</td><td class="c">${l.disc ? qtyFmt(l.disc) + "%" : "0"}</td><td class="r">${money(l.amount)}</td></tr>`).join("")}
       ${Array.from({ length: minRows }, () => '<tr class="item empty"><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join("")}
       <tr><td colspan="2" rowspan="2" class="nw">Total Value in Words :</td><td colspan="3" rowspan="2"><b>${amountInWords(inv.total)}</b></td><td colspan="2"><b>Sub Total</b></td><td></td><td class="r"><b>${money(inv.subtotal)}</b></td></tr>
-      <tr><td colspan="2"><b>SGST</b></td><td class="c">${igst ? "" : inv.gst_rate / 2 + "%"}</td><td class="r">${igst ? "" : money(inv.sgst)}</td></tr>
-      <tr><td colspan="2" class="nw">Delivery Condition :</td><td colspan="3">${h(inv.delivery_condition)}</td><td colspan="2"><b>CGST</b></td><td class="c">${igst ? "" : inv.gst_rate / 2 + "%"}</td><td class="r">${igst ? "" : money(inv.cgst)}</td></tr>
-      <tr><td colspan="2" class="nw">Payment Terms :</td><td colspan="3">${h(inv.payment_terms)}</td><td colspan="2"><b>IGST</b></td><td class="c">${igst ? inv.gst_rate + "%" : ""}</td><td class="r">${igst ? money(inv.igst) : ""}</td></tr>
+      <tr><td colspan="2"><b>SGST</b></td><td class="c">${igst ? "" : pc(rt / 2)}</td><td class="r">${igst ? "" : money(inv.sgst)}</td></tr>
+      <tr><td colspan="2" class="nw">Delivery Condition :</td><td colspan="3">${h(inv.delivery_condition)}</td><td colspan="2"><b>CGST</b></td><td class="c">${igst ? "" : pc(rt / 2)}</td><td class="r">${igst ? "" : money(inv.cgst)}</td></tr>
+      <tr><td colspan="2" class="nw">Payment Terms :</td><td colspan="3">${h(inv.payment_terms)}</td><td colspan="2"><b>IGST</b></td><td class="c">${igst ? pc(rt) : ""}</td><td class="r">${igst ? money(inv.igst) : ""}</td></tr>
       <tr class="grand"><td colspan="5"><b>Packing Information</b></td><td colspan="3"><b>GRAND TOTAL</b></td><td class="r"><b>${money(inv.total)}</b></td></tr>
       ${pkRows.map(([a, b]) => `<tr><td colspan="2">${h(a.box)}</td><td colspan="2">${h(a.text)}</td><td colspan="2">${h(b?.box || "")}</td><td colspan="3">${h(b?.text || "")}</td></tr>`).join("")}
       <tr><td colspan="9" class="decl">${h(s.invoice_declaration)}</td></tr>

@@ -34,14 +34,14 @@ export function attachSuggest(tbody, { products = [], recent = [], rateKey, onPi
   const seen = new Set();
   const options = [];
   for (const p of products) {
-    options.push({ id: p.id, code: p.code, part: p.customer_part_no, drawing: p.drawing_no, name: p.name, hsn: p.hsn, uom: p.uom, rate: p[rateKey] });
+    options.push({ id: p.id, code: p.code, part: p.customer_part_no, drawing: p.drawing_no, name: p.name, hsn: p.hsn, uom: p.uom, rate: p[rateKey], gst: p.gst_rate });
     seen.add(compact(p.name) + "|" + compact(p.customer_part_no));
   }
   for (const r of recent) {
     const k = compact(r.description) + "|" + compact(r.party_part_no);
     if (seen.has(k)) continue;
     seen.add(k);
-    options.push({ part: r.party_part_no, name: r.description, hsn: r.hsn, uom: r.uom, rate: r.rate, earlier: true });
+    options.push({ part: r.party_part_no, name: r.description, hsn: r.hsn, uom: r.uom, rate: r.rate, gst: r.gst_rate, earlier: true });
   }
 
   document.querySelectorAll(".suggest").forEach((b) => b.remove()); // one list at a time, even if the page was drawn twice

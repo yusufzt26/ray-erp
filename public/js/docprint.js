@@ -1,5 +1,5 @@
 // A4 print for quotations, sales orders, delivery challans, purchase orders and GRNs.
-import { DOC_TYPES } from "./fields.js";
+import { DOC_TYPES, gstTotals } from "./fields.js";
 import { amountInWords } from "./invoice.js";
 import { fitPages, pdfName } from "./printfit.js";
 
@@ -25,6 +25,18 @@ export async function docPrint({ api, layout, S }, type, id) {
   const partyBlock = [party?.name || doc.party_name, party?.address, cityLine, party?.contact_person ? `Kind Attn : ${party.contact_person}${party.phone ? " - " + party.phone : ""}` : ""].filter(Boolean).join("\n");
   const sub = lines.reduce((t, l) => t + Number(l.amount || 0), 0);
   const total = Number(doc.total_amount || sub);
+  // GST rows: CGST + SGST for the same state, IGST for another state; older documents show one tax line.
+  const rates = [...new Set(lines.filter((l) => Number(l.amount)).map((l) => Number(l.gst_rate ?? 18)))];
+  const one = rates.length === 1 ? rates[0] : null;
+  // Several GST rates: one row per rate, when the saved tax is what the rates give (not typed by hand).
+  const byRate = rates.map((r) => [r, gstTotals(lines.filter((l) => Number(l.gst_rate ?? 18) === r), doc.tax_type)]);
+  const asCalc = rates.length > 1 && Math.abs(byRate.reduce((t, [, g]) => t + g.tax, 0) - (Number(doc.cgst || 0) + Number(doc.sgst || 0) + Number(doc.igst || 0))) < 0.01;
+  const taxRows = !doc.tax_type ? [["GST / Tax", total - sub]]
+    : asCalc ? byRate.flatMap(([r, g]) => doc.tax_type === "IGST" ? [[`IGST @ ${r}%`, g.igst]] : [[`CGST @ ${r / 2}%`, g.cgst], [`SGST @ ${r / 2}%`, g.sgst]])
+    : doc.tax_type === "IGST" ? [[`IGST${one !== null ? ` @ ${one}%` : ""}`, doc.igst]]
+    : [[`CGST${one !== null ? ` @ ${one / 2}%` : ""}`, doc.cgst], [`SGST${one !== null ? ` @ ${one / 2}%` : ""}`, doc.sgst]];
+  const other = doc.tax_type ? Math.round((total - sub - taxRows.reduce((t, r) => t + Number(r[1] || 0), 0)) * 100) / 100 : 0;
+  if (Math.abs(other) >= 0.01) taxRows.push(["Round off / other", other]);
   const blanks = Math.max(0, 6 - lines.length);
   const cols = priced ? 8 : 6;
   layout(`
@@ -52,9 +64,9 @@ export async function docPrint({ api, layout, S }, type, id) {
           <td class="r">${qty(l.qty)}</td><td class="c">${h(l.uom)}</td>${priced ? `<td class="r">${money(l.rate)}</td><td class="r">${money(l.amount)}</td>` : ""}</tr>`).join("")}
         ${'<tr class="item empty">' + "<td></td>".repeat(cols) + "</tr>"}${("<tr class=\"item empty\">" + "<td></td>".repeat(cols) + "</tr>").repeat(blanks)}
         ${doc.notes ? `<tr class="notes"><td colspan="${cols}"><b>Notes :</b> ${nl(doc.notes)}</td></tr>` : ""}
-        ${priced ? `<tr class="grand"><td colspan="5" rowspan="3"><b>Amount in words :</b><br>${h(amountInWords(total))}</td><td colspan="2">Sub Total</td><td class="r">${money(sub)}</td></tr>
-          <tr><td colspan="2">GST / Tax</td><td class="r">${money(total - sub)}</td></tr>
-          <tr class="b"><td colspan="2">Total</td><td class="r">${money(total)}</td></tr>`
+        ${priced ? `<tr class="grand"><td colspan="5" rowspan="${taxRows.length + 2}"><b>Amount in words :</b><br>${h(amountInWords(total))}</td><td colspan="2">Taxable value</td><td class="r">${money(sub)}</td></tr>
+          ${taxRows.map(([k, v]) => `<tr><td colspan="2">${h(k)}</td><td class="r nw">${money(v)}</td></tr>`).join("")}
+          <tr class="b"><td colspan="2">Total</td><td class="r nw">${money(total)}</td></tr>`
           : `<tr class="grand"><td colspan="4"><b>Total quantity</b></td><td class="r"><b>${qty(lines.reduce((t, l) => t + Number(l.qty || 0), 0))}</b></td><td></td></tr>`}
         <tr class="foot"><td colspan="${priced ? 5 : 3}">${type === "quotation" || type === "customer_po" || (type === "purchase_order" && (doc.terms || s.po_terms)) ? `<b>TERMS &amp; CONDITIONS :</b><br>${nl(type === "quotation" ? doc.terms || s.quotation_terms || s.invoice_terms : type === "purchase_order" ? doc.terms || s.po_terms : s.invoice_terms)}` : type === "grn" ? "<b>Received in good condition.</b><br>Checked by :" : "<b>Receiver's signature &amp; stamp</b>"}</td>
           <td colspan="${priced ? 3 : 3}" class="c sign"><b>For ${h(s.company_name)}</b><div class="gap"></div>Authorised Signatory</td></tr>

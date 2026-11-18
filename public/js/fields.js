@@ -181,3 +181,49 @@ export function addCategories(rows) {
   const f = MASTERS.products.fields.find((x) => x.key === "category");
   f.options = Object.entries(PRODUCT_CATEGORIES).map(([k, v]) => [k, `${k} - ${v}`]);
 }
+
+// ---------------------------------------------------------------- GST
+// Same state as us: CGST + SGST (half the rate each). Other state: IGST (full rate).
+// The state is the first two digits of the GSTIN; without a GSTIN, the party's State from the master.
+export const GST_STATE_CODES = {
+  "jammu and kashmir": 1, "himachal pradesh": 2, punjab: 3, chandigarh: 4, uttarakhand: 5, haryana: 6, delhi: 7, rajasthan: 8,
+  "uttar pradesh": 9, bihar: 10, sikkim: 11, "arunachal pradesh": 12, nagaland: 13, manipur: 14, mizoram: 15, tripura: 16,
+  meghalaya: 17, assam: 18, "west bengal": 19, jharkhand: 20, odisha: 21, chhattisgarh: 22, "madhya pradesh": 23, gujarat: 24,
+  "dadra and nagar haveli and daman and diu": 26, maharashtra: 27, karnataka: 29, goa: 30, lakshadweep: 31, kerala: 32,
+  "tamil nadu": 33, puducherry: 34, "andaman and nicobar islands": 35, telangana: 36, "andhra pradesh": 37, ladakh: 38,
+};
+export const DEFAULT_GST_RATE = 18;
+export function gstStateCode(gstin, state) {
+  const g = String(gstin || "").trim().toUpperCase();
+  if (/^\d{2}[A-Z0-9]{13}$/.test(g)) return Number(g.slice(0, 2));
+  const s = String(state || "").trim();
+  if (/^\d{1,2}\b/.test(s)) return Number(s.match(/^\d{1,2}/)[0]);
+  return GST_STATE_CODES[s.toLowerCase()] || null;
+}
+/** "IGST" or "CGST_SGST". Unknown party state counts as our own state. */
+export function gstTaxType(settings, partyGstin, partyState) {
+  const own = gstStateCode(settings?.company_gstin, settings?.company_state) || 27;
+  const other = gstStateCode(partyGstin, partyState);
+  return other && other !== own ? "IGST" : "CGST_SGST";
+}
+const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+/** Tax on lines [{amount, gst_rate}], worked out per rate. */
+export function gstTotals(lines, taxType) {
+  const byRate = new Map();
+  for (const l of lines) {
+    const amt = Number(l.amount) || 0;
+    if (!amt) continue;
+    const raw = l.gst_rate === null || l.gst_rate === undefined || l.gst_rate === "" ? DEFAULT_GST_RATE : Number(l.gst_rate);
+    const rate = Number.isFinite(raw) ? raw : DEFAULT_GST_RATE;
+    byRate.set(rate, (byRate.get(rate) || 0) + amt);
+  }
+  let cgst = 0, igst = 0, taxable = 0;
+  const rates = [...byRate.keys()].sort((a, b) => a - b);
+  for (const [rate, base] of byRate) {
+    taxable += base;
+    if (taxType === "IGST") igst += r2((base * rate) / 100);
+    else cgst += r2((base * rate) / 200);
+  }
+  taxable = r2(taxable); cgst = r2(cgst); igst = r2(igst);
+  return { taxable, cgst, sgst: cgst, igst, tax: r2(2 * cgst + igst), total: r2(taxable + 2 * cgst + igst), rates };
+}
