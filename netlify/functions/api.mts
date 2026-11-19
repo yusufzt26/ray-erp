@@ -634,7 +634,7 @@ route("PUT", "/api/permissions", async (c) => {
 });
 
 const SETTING_KEYS = ["company_name", "company_gstin", "company_pan", "company_state", "company_gst_wef", "company_address",
-  "company_email", "company_mobile", "company_tagline", "invoice_prefix", "invoice_terms", "quotation_terms", "po_terms", "bank_details", "invoice_declaration"];
+  "company_email", "company_mobile", "company_tagline", "invoice_prefix", "invoice_terms", "quotation_terms", "po_terms", "bank_details", "invoice_declaration", "link_old_until"];
 route("PUT", "/api/settings", async (c) => {
   if (c.user?.role !== "Admin") fail(403, "Only Admin can change company settings.");
   for (const k of SETTING_KEYS) {
@@ -647,7 +647,7 @@ route("PUT", "/api/settings", async (c) => {
 });
 
 // ---------------------------------------------------------------- sales invoices
-const INV_COLS = `id, inv_no, to_char(inv_date, 'YYYY-MM-DD') AS inv_date, customer_id, customer_po_id, po_no,
+const INV_COLS = `id, inv_no, to_char(inv_date, 'YYYY-MM-DD') AS inv_date, customer_id, customer_po_id, challan_id, po_no,
   to_char(po_date, 'YYYY-MM-DD') AS po_date, supplier_code, bill_to, ship_to, gstin, pan, tax_type, gst_rate,
   subtotal, cgst, sgst, igst, total, delivery_condition, payment_terms, packing, status, eway, segment, created_at`;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -882,6 +882,74 @@ async function refreshStatus(query: any, docId: number) {
   if (st && st !== cur && !(p.doc.doc_type === "quotation" && cur === "Lost"))
     await query("UPDATE documents SET status = $1 WHERE id = $2", [st, docId]);
 }
+
+// ---------------------------------------------------------------- linking earlier documents
+// For a setup period (until the date in Company Settings), any document or invoice can be tied
+// to the earlier document it came from, so old entries join the same chain as new ones.
+const LINK_PARENTS: Record<string, string[]> = {
+  customer_po: ["quotation"], delivery_challan: ["customer_po"], grn: ["purchase_order"],
+  vendor_invoice: ["purchase_order", "grn"], invoice: ["delivery_challan", "customer_po"],
+};
+async function linkingUntil() {
+  const v = str((await one("SELECT value FROM settings WHERE key = 'link_old_until'"))?.value);
+  return { until: v || null, open: !!v && v >= todayIso() };
+}
+async function linkSubject(c: any) {
+  const id = Number(c.params.id);
+  if (c.params.kind === "invoice") {
+    require(c, "sales_invoice");
+    const inv = await one("SELECT id, customer_id, customer_po_id, challan_id FROM invoices WHERE id = $1", [id]);
+    if (!inv) fail(404, "Not found");
+    const cu = await one("SELECT name FROM customers WHERE id = $1", [inv.customer_id]);
+    return { type: "invoice", perm: "sales_invoice", id, partyId: inv.customer_id, partyName: cu?.name || "", current: inv.challan_id || inv.customer_po_id || null };
+  }
+  const d = await one("SELECT id, doc_type, party_id, party_name, parent_id FROM documents WHERE id = $1", [id]);
+  if (!d) fail(404, "Not found");
+  require(c, d.doc_type);
+  return { type: d.doc_type, perm: d.doc_type, id, partyId: d.party_id, partyName: d.party_name || "", current: d.parent_id || null };
+}
+const linkCandidates = (s: any) => q(`SELECT id, doc_type, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, status, total_amount
+    FROM documents WHERE doc_type = ANY($1) AND id <> $2
+      AND (($3::int IS NOT NULL AND party_id = $3) OR (LOWER(COALESCE(party_name, '')) = LOWER($4) AND $4 <> ''))
+    ORDER BY doc_date DESC NULLS LAST, id DESC LIMIT 300`, [LINK_PARENTS[s.type] || [], s.type === "invoice" ? 0 : s.id, s.partyId || null, s.partyName]);
+
+route("GET", "/api/link-old/:kind/:id", async (c) => {
+  const s = await linkSubject(c);
+  const w = await linkingUntil();
+  if (!LINK_PARENTS[s.type]) return json({ ...w, types: [], candidates: [], current: s.current });
+  return json({ ...w, types: LINK_PARENTS[s.type], current: s.current, candidates: await linkCandidates(s) });
+});
+
+route("POST", "/api/link-old/:kind/:id", async (c) => {
+  const s = await linkSubject(c);
+  require(c, s.perm, "edit");
+  const w = await linkingUntil();
+  if (!w.open) fail(403, "Linking earlier documents is switched off. Admin can turn it on in Company Settings.");
+  const pid = num(c.body.parent_id);
+  let parent: any = null;
+  if (pid) {
+    parent = (await linkCandidates(s)).find((r: any) => r.id === pid);
+    if (!parent) fail(400, "That document can't be linked here: it must be an earlier document of the same party.");
+  }
+  const old = s.current;
+  await tx(async (query) => {
+    if (s.type === "invoice") {
+      const challan = parent?.doc_type === "delivery_challan" ? parent : null;
+      const soId = challan ? (await query("SELECT parent_id FROM documents WHERE id = $1", [challan.id]))[0]?.parent_id || null : parent?.id || null;
+      await query("UPDATE invoices SET challan_id = $1, customer_po_id = $2 WHERE id = $3", [challan?.id || null, soId, s.id]);
+      if (soId) {
+        const so = (await query("SELECT doc_no, doc_date FROM documents WHERE id = $1", [soId]))[0];
+        await query("UPDATE invoices SET po_no = COALESCE(NULLIF(po_no, ''), $1), po_date = COALESCE(po_date, $2) WHERE id = $3", [so?.doc_no || null, so?.doc_date || null, s.id]);
+      }
+      for (const d of [old, challan?.id, soId]) if (d) await refreshStatus(query, d);
+      if (old) { const op = (await query("SELECT parent_id FROM documents WHERE id = $1", [old]))[0]?.parent_id; if (op) await refreshStatus(query, op); }
+    } else {
+      await query("UPDATE documents SET parent_id = $1 WHERE id = $2", [parent?.id || null, s.id]);
+      for (const d of [old, parent?.id]) if (d) await refreshStatus(query, d);
+    }
+  });
+  return json({ ok: true, message: parent ? `Linked to ${parent.ref_no}.` : "Link removed." });
+});
 
 /** New document pre-filled from another one, with only the quantity still pending. */
 route("GET", "/api/convert/:id/:target", async (c) => {
@@ -1397,7 +1465,7 @@ route("GET", "/api/accounts/statement/:dir/:id", async (c) => {
   const bills = dir === "in"
     ? `SELECT to_char(inv_date, 'YYYY-MM-DD') AS day, 'Invoice' AS kind, inv_no AS ref, po_no AS notes, total AS debit, 0 AS credit, id AS sort2, '#/invoices/' || id AS href, NULL::int AS pay_id
         FROM invoices WHERE customer_id = $1 AND status <> 'Cancelled'`
-    : `SELECT to_char(COALESCE(doc_date, created_at::date), 'YYYY-MM-DD'), 'Invoice', COALESCE(doc_no, ref_no), ref_no, COALESCE(total_amount, subtotal, 0), 0, id, '#/d/vendor_invoice/' || id, NULL::int
+    : `SELECT to_char(COALESCE(doc_date, created_at::date), 'YYYY-MM-DD') AS day, 'Invoice' AS kind, COALESCE(doc_no, ref_no) AS ref, ref_no AS notes, COALESCE(total_amount, subtotal, 0) AS debit, 0 AS credit, id AS sort2, '#/d/vendor_invoice/' || id AS href, NULL::int AS pay_id
         FROM documents WHERE party_id = $1 AND doc_type = 'vendor_invoice' AND status <> 'Cancelled'`;
   const rows = await q(`SELECT * FROM (${bills}
       UNION ALL SELECT to_char(pay_date, 'YYYY-MM-DD'), 'Payment', COALESCE(mode, '') || COALESCE(' ' || reference, ''), notes, 0, amount, 1000000000 + id, NULL, id

@@ -571,6 +571,36 @@ await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin
   ok(await p.inputValue("[name=name]") === "Polytube Extrusions LLP" && await p.inputValue("[name=state]") === "Maharashtra", "new customer: name filled from the vendor with the same GSTIN");
   await p.screenshot({ path: join(SHOTS, "customer_gstin_name.png") });
 }
+// setup period: link an old GRN to its PO, and an old invoice to its sales order
+{
+  const post = (u, body) => p.evaluate(async ([u, body]) => (await fetch(u, { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "ray-erp" }, body: JSON.stringify(body) })).json(), [u, body]);
+  const po = (await getJ("/api/d/purchase_order")).rows.find((r) => r.party_name === "Polytube Extrusions LLP");
+  const vendorId = (await getJ("/api/d/purchase_order/" + po.id)).doc.party_id;
+  const oldGrn = await post("/api/d/grn/save", { party_id: vendorId, doc_date: "2026-10-02", lines: [{ description: "Tube FLX 9X7/PA12 Black", qty: 50, rate: 36.4 }] });
+  ok(oldGrn.id, "old GRN entered " + JSON.stringify(oldGrn));
+  ok(Array.isArray((await getJ(`/api/accounts/statement/out/${vendorId}`)).rows), "vendor statement opens");
+  await p.goto(U + "/#/d/grn/" + oldGrn.id); await p.waitForSelector("#lo_pick");
+  ok((await p.textContent("#linkold")).includes("Link to an earlier Purchase Order"), "old GRN offers linking to an earlier PO");
+  await p.selectOption("#lo_pick", String(po.id)); await p.click("#lo_save"); await p.waitForSelector("text=Linked to");
+  ok((await getJ("/api/d/grn/" + oldGrn.id)).doc.parent_id === po.id, "old GRN now linked to the PO");
+  await p.waitForSelector(`#links >> text=${po.ref_no}`);
+  ok(true, "linked documents show the PO next to the old GRN");
+  await p.screenshot({ path: join(SHOTS, "link_old_grn.png"), fullPage: true });
+  const inv = (await getJ("/api/invoices")).rows.find((r) => r.status !== "Cancelled");
+  await p.goto(U + "/#/invoices/" + inv.id); await p.waitForSelector("#links");
+  await p.waitForTimeout(800);
+  if (await p.isVisible("#lo_pick")) {
+    const so = await p.$eval("#lo_pick", (s) => [...s.options].find((o) => o.value)?.value);
+    await p.selectOption("#lo_pick", so); await p.click("#lo_save"); await p.waitForSelector("text=Linked to");
+    const saved = (await getJ("/api/invoices/" + inv.id)).inv;
+    ok(String(saved.customer_po_id) === so || String(saved.challan_id) === so, "old invoice linked to the sales order / challan " + so + " " + JSON.stringify([saved.customer_po_id, saved.challan_id]));
+  } else ok((await p.textContent("main")).includes("Linked documents"), "invoice shows links panel");
+  await p.evaluate(async () => fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json", "x-requested-with": "ray-erp" }, body: JSON.stringify({ link_old_until: "" }) }));
+  await p.goto(U + "/#/d/grn/" + oldGrn.id); await p.waitForSelector("#links"); await p.waitForTimeout(800);
+  ok(!(await p.isVisible("#lo_pick")), "linking hidden once the setup period is switched off");
+  const refused = await post("/api/link-old/doc/" + oldGrn.id, { parent_id: null });
+  ok(/switched off/.test(refused.error || refused.message || ""), "server refuses linking after the period " + JSON.stringify(refused));
+}
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");
 await p.fill("[name=username]", "priya.accounts"); await p.fill("[name=full_name]", "Priya"); await p.selectOption("[name=role]", "Accounts");
 await p.fill("[name=password]", "secret2"); await p.click("button.primary"); await p.waitForSelector("text=User saved");

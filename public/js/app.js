@@ -2,7 +2,7 @@ import { CONVERT, DOC_TYPES, GST_STATE_CODES, LEVELS, MASTERS, MODULES, PRODUCT_
 import { imageToCanvas, readImage, readPdf, readScannedPdf, readSheet } from "./pdfread.js";
 import { invoicePages } from "./invoice.js";
 import { morePages } from "./more.js";
-import { linksPanel, payStatus } from "./links.js";
+import { linkOldPanel, linksPanel, payStatus } from "./links.js";
 import { docPrint } from "./docprint.js";
 import { ewayPage } from "./eway.js";
 import { attachSuggest } from "./suggest.js";
@@ -670,7 +670,7 @@ pages.docForm = async (type, id, preset = null) => {
         ${found ? `<a class="btn" href="#/d/${type}/upload">Cancel</a>` : ""}</div>` : ""}
       </div>
     </form>
-    <div id="links"></div>
+    <div id="links"></div><div id="linkold"></div>
     ${doc.id && editable ? '<button class="btn danger small" id="del">Delete</button>' : ""}`);
   const DONE_WORD = { customer_po: "Dispatched", purchase_order: "Received", delivery_challan: "Invoiced", grn: "Billed" };
   const showProgress = (progress) => {
@@ -693,7 +693,11 @@ pages.docForm = async (type, id, preset = null) => {
     }).catch(() => {});
   if (doc.id && type === "vendor_invoice" && can("accounts"))
     payStatus(api, "out", doc.id).then((html) => { $("#links")?.insertAdjacentHTML("beforebegin", `<div>${html}</div>`); }).catch(() => {});
-  if (doc.id) linksPanel(api, "doc", doc.id, showProgress).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
+  const loadLinks = () => linksPanel(api, "doc", doc.id, showProgress).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
+  if (doc.id) {
+    loadLinks();
+    linkOldPanel(api, "doc", doc.id, $("#linkold"), { canEdit: editable, onDone: loadLinks }).catch(() => {});
+  }
 
   const tbody = $("#lines");
   const renumber = () => { $$("tr", tbody).forEach((r, i) => ($(".ln", r).textContent = i + 1)); recalc(); };
@@ -943,6 +947,7 @@ pages.settings = async () => {
       ${inp("company_email", "Email")}
       ${inp("company_mobile", "Mobile")}
       ${inp("invoice_prefix", "Invoice number prefix", "Invoices are numbered PREFIX/YY-NNN, e.g. R/26-005")}
+      <label>Link earlier documents until<input type="date" name="link_old_until" value="${h(s.link_old_until)}"><small>Setup period: old orders, GRNs, bills and invoices can be linked to the document they came from. Clear the date to switch it off.</small></label>
       ${ta("company_address", "Address", 2)}
       ${ta("company_tagline", "Tagline under the logo", 2)}
       ${ta("bank_details", "Bank details")}

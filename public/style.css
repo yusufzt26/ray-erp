@@ -330,3 +330,5 @@ input.gstpct { width: 4.5rem; }
 table.grid th { cursor: pointer; user-select: none; }
 table.grid th[data-sort="asc"]::after { content: " ▲"; font-size: .7em; }
 table.grid th[data-sort="desc"]::after { content: " ▼"; font-size: .7em; }
+.linkold .row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+.linkold select { max-width: 100%; min-width: 0; flex: 1 1 320px; }

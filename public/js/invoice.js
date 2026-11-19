@@ -48,7 +48,7 @@ function billToFor(c) {
   return [c.name, c.address, cityLine, c.contact_person ? `Kind Attn : ${c.contact_person}${c.phone ? " - " + c.phone : ""}` : ""].filter(Boolean).join("\n");
 }
 
-import { linksPanel } from "./links.js";
+import { linkOldPanel, linksPanel } from "./links.js";
 import { fitPages, pdfName } from "./printfit.js";
 import { payStatus } from "./links.js";
 import { gstStateCode, gstTaxType, gstTotals, periodFilter, segmentChoice, segmentFilter, segmentPill } from "./fields.js";
@@ -170,10 +170,11 @@ export function invoicePages(ctx) {
       </fieldset>
       ${ed ? `<div class="buttons sticky-save"><button class="btn primary big">💾 Save invoice</button></div>` : ""}
       </form>
-      <div id="links"></div>
+      <div id="links"></div><div id="linkold"></div>
       ${id && ctx.S.user.role === "Admin" ? '<button class="btn danger small" id="del">Delete invoice</button>' : ""}`);
     if (id && can("accounts")) payStatus(api, "in", id).then((html) => { if ($("#paystat")) $("#paystat").innerHTML = html; }).catch(() => {});
-    if (id) linksPanel(api, "invoice", id).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
+    const loadLinks = () => linksPanel(api, "invoice", id).then((html) => { if ($("#links")) $("#links").innerHTML = html; }).catch(() => {});
+    if (id) { loadLinks(); linkOldPanel(api, "invoice", id, $("#linkold"), { canEdit: can("sales_invoice", "edit"), onDone: loadLinks }).catch(() => {}); }
 
     const tbody = $("#lines"), boxes = $("#boxes");
     const customer = () => customers.find((c) => String(c.id) === $("#customer_id").value);

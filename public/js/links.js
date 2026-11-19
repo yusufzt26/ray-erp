@@ -17,6 +17,30 @@ export async function linksPanel(api, kind, id, onProgress) {
   return `<div class="card links"><h2>Linked documents</h2>${chain}${prog}</div>`;
 }
 
+// Setup period: tie this document to the earlier one it came from (old entries made before the chain existed).
+const LABEL = { quotation: "Quotation", customer_po: "Sales Order", delivery_challan: "Delivery Challan", purchase_order: "Purchase Order", grn: "Goods Receipt" };
+export async function linkOldPanel(api, kind, id, el, { canEdit, onDone }) {
+  const r = await api("GET", `/api/link-old/${kind}/${id}`);
+  if (!r.open || !canEdit || !r.types.length || !el) return;
+  const what = r.types.map((t) => LABEL[t]).join(" or ");
+  el.innerHTML = `<div class="card linkold"><h2>🔗 Link to an earlier ${h(what)}</h2>
+    <p class="muted small">For entries made before the documents were linked. Open until ${dmy(r.until)} (Company Settings).</p>
+    ${r.candidates.length ? `<div class="row"><select id="lo_pick"><option value="">— not linked —</option>
+      ${r.candidates.map((c) => `<option value="${c.id}" ${c.id === r.current ? "selected" : ""}>${h(LABEL[c.doc_type])} ${h(c.ref_no)}${c.doc_no && c.doc_no !== c.ref_no ? ` · ${h(c.doc_no)}` : ""} · ${dmy(c.doc_date)} · ${h(c.status)}${c.total_amount ? ` · ${money(c.total_amount)}` : ""}</option>`).join("")}
+      </select><button type="button" class="btn small primary" id="lo_save">Save link</button></div><small id="lo_msg"></small>`
+      : `<p class="muted small">No ${h(what)} for this party yet. Enter the old one first, then link it here.</p>`}</div>`;
+  const btn = el.querySelector("#lo_save");
+  if (btn) btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const res = await api("POST", `/api/link-old/${kind}/${id}`, { parent_id: el.querySelector("#lo_pick").value || null });
+      el.querySelector("#lo_msg").textContent = res.message;
+      if (onDone) onDone();
+    } catch (err) { el.querySelector("#lo_msg").textContent = err.message; }
+    btn.disabled = false;
+  };
+}
+
 // "Paid ₹X · Balance ₹Y" strip for a sales invoice (dir in) or vendor bill (dir out).
 export async function payStatus(api, dir, id) {
   const { bill, payments } = await api("GET", `/api/bills/${dir}/${id}`);
