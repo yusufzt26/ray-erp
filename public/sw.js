@@ -1,6 +1,6 @@
 // Lets the ERP be installed as an app. Pages and data always come fresh from
 // the server; the saved copy of the app files is used only when offline.
-const CACHE = "ray-erp-v1";
+const CACHE = "ray-erp-v2";
 self.addEventListener("install", (e) => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(
   caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));

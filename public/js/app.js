@@ -86,7 +86,7 @@ function layout(body) {
   document.body.innerHTML = `
     <header class="top">
       <button class="menu-btn" aria-label="Menu" onclick="document.body.classList.toggle('nav-open')">☰</button>
-      <a class="brand" href="#/"><img src="/mark.png" alt=""> ${h(S.settings.company_name || "Ray Precicomp")} <span>ERP</span></a>
+      <a class="brand" href="#/"><img src="/mark.png?v=2" alt=""> ${h(S.settings.company_name || "Ray Precicomp")} <span>ERP</span></a>
       <div class="who">${h(S.user.full_name)} · <b>${h(S.user.role)}</b> · <a href="#/password">Password</a> · <a href="#" id="logout">Log out</a></div>
     </header>
     <div class="layout"><nav class="side" onclick="document.body.classList.remove('nav-open')">${side}</nav>

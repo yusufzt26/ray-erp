@@ -566,7 +566,7 @@ await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin
 }
 // lists sort by a clicked column heading; new customer gets State and PAN from the GSTIN
 {
-  await p.goto(U + "/#/d/purchase_order?period="); await p.waitForSelector("table.grid th");
+  await p.waitForTimeout(800); await p.goto(U + "/#/d/purchase_order?period="); await p.waitForSelector("table.grid tr[data-href]"); await p.waitForTimeout(800);
   const refs = async () => p.$$eval("table.grid tr[data-href] td:first-child", (tds) => tds.map((t) => t.textContent.trim()));
   await p.click("table.grid th:first-child");
   const asc = await refs();
