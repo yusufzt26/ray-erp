@@ -516,8 +516,13 @@ route("POST", "/api/d/:type/save", async (c) => {
       segment: segmentOf(b.segment),
     };
     if (!did && num(b.parent_id)) (header as any).parent_id = num(b.parent_id);
-    const dup = header.doc_no ? (await query("SELECT ref_no FROM documents WHERE doc_type = $1 AND doc_no = $2 AND party_name = $3 AND id <> $4",
-      [type, header.doc_no, partyName, did || 0]))[0] : null;
+    // Same number from the same party (spaces, "/" and "-" ignored): a sales order's customer PO number is refused,
+    // other documents get a note.
+    const dup = header.doc_no && !d.own ? (await query(`SELECT ref_no FROM documents WHERE doc_type = $1 AND id <> $4
+        AND REGEXP_REPLACE(UPPER(doc_no), '[^A-Z0-9]', '', 'g') = REGEXP_REPLACE(UPPER($2), '[^A-Z0-9]', '', 'g')
+        AND ((party_id IS NOT NULL AND party_id = $5) OR LOWER(party_name) = LOWER($3)) LIMIT 1`,
+      [type, header.doc_no, partyName, did || 0, partyId || null]))[0] : null;
+    if (dup && type === "customer_po") fail(400, `Customer PO number ${header.doc_no} from ${partyName} is already entered as sales order ${dup.ref_no}. Open that one instead, or correct the number.`);
     if (dup) messages.push(`Note: ${d.noLabel} ${header.doc_no} from ${partyName} was already entered as ${dup.ref_no}.`);
     const keys = Object.keys(header);
     let id = did;
@@ -674,6 +679,12 @@ const fyOf = (iso: string) => { const [y, m] = iso.split("-").map(Number); retur
 async function nextInvoiceNo(query: any, isoDay: string) {
   const fy = fyOf(isoDay);
   const prefix = (await query("SELECT value FROM settings WHERE key = 'invoice_prefix'"))[0]?.value || "R";
+  // Skip any number already on an invoice (e.g. after the series was set back), so no number is ever used twice.
+  for (let i = 0; i < 500; i++) {
+    const r = await query("INSERT INTO counters (name, value) VALUES ($1, 1) ON CONFLICT (name) DO UPDATE SET value = counters.value + 1 RETURNING value", [`invoice_${fy}`]);
+    const no = `${prefix}/${fy}-${String(r[0].value).padStart(3, "0")}`;
+    if (!(await query("SELECT 1 FROM invoices WHERE UPPER(inv_no) = UPPER($1)", [no])).length) return no;
+  }
   const rows = await query("INSERT INTO counters (name, value) VALUES ($1, 1) ON CONFLICT (name) DO UPDATE SET value = counters.value + 1 RETURNING value", [`invoice_${fy}`]);
   return `${prefix}/${fy}-${String(rows[0].value).padStart(3, "0")}`;
 }
@@ -952,15 +963,17 @@ route("GET", "/api/link-old/:kind/:id", async (c) => {
   const s = await linkSubject(c);
   const w = await linkingUntil();
   if (!LINK_PARENTS[s.type]) return json({ ...w, types: [], candidates: [], current: s.current });
-  return json({ ...w, types: LINK_PARENTS[s.type], current: s.current, candidates: await linkCandidates(s) });
+  const cur = s.current ? await one("SELECT id, doc_type, ref_no FROM documents WHERE id = $1", [s.current]) : null;
+  return json({ ...w, types: LINK_PARENTS[s.type], current: s.current, current_doc: cur, candidates: w.open ? await linkCandidates(s) : [] });
 });
 
 route("POST", "/api/link-old/:kind/:id", async (c) => {
   const s = await linkSubject(c);
   require(c, s.perm, "edit");
   const w = await linkingUntil();
-  if (!w.open) fail(403, "Linking earlier documents is switched off. Admin can turn it on in Company Settings.");
   const pid = num(c.body.parent_id);
+  // Unlinking a mistake is always allowed; new links only during the setup period.
+  if (pid && !w.open) fail(403, "Linking earlier documents is switched off. Admin can turn it on in Company Settings.");
   let parent: any = null;
   if (pid) {
     parent = (await linkCandidates(s)).find((r: any) => r.id === pid);

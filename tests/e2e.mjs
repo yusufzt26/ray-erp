@@ -606,6 +606,10 @@ await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin
     const soDoc = (await getJ("/api/d/customer_po/" + so.id)).doc;
     const bad = await post("/api/invoices/save", { customer_id: soDoc.party_id, inv_date: "2026-11-19", customer_po_id: so.id, po_no: "WRONG-99999", lines: [{ description: "x", qty: 1, rate: 1 }] });
     ok(/does not match/.test(bad.error || ""), "invoice refused for a sales order with a different customer PO no " + JSON.stringify(bad));
+    const dupSo = await post("/api/d/customer_po/save", { party_id: soDoc.party_id, doc_no: " " + soDoc.doc_no.toLowerCase().replace(/-/g, " ") + " ", lines: [{ description: "x", qty: 1, rate: 1 }] });
+    ok(/already entered as sales order/.test(dupSo.error || ""), "same customer PO number refused for the same customer " + JSON.stringify(dupSo));
+    const resave = await post("/api/d/customer_po/save", { id: so.id, party_id: soDoc.party_id, doc_no: soDoc.doc_no, status: soDoc.status, lines: (await getJ("/api/d/customer_po/" + so.id)).lines });
+    ok(resave.id === so.id, "re-saving the same sales order is fine " + JSON.stringify(resave).slice(0, 120));
     const opts = await getJ(`/api/link-old/invoice/${inv.id}`);
     const invPo = (await getJ("/api/invoices/" + inv.id)).inv.po_no;
     ok(opts.candidates.every((c) => !c.cust_po || !invPo || c.cust_po.replace(/[^A-Z0-9]/gi, "").toUpperCase().startsWith(invPo.replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 6))), "link list offers only matching customer PO numbers"); }
@@ -620,7 +624,10 @@ await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin
   await p.evaluate(async () => fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json", "x-requested-with": "ray-erp" }, body: JSON.stringify({ link_old_until: "" }) }));
   await p.goto(U + "/#/d/grn/" + oldGrn.id); await p.waitForSelector("#links"); await p.waitForTimeout(800);
   ok(!(await p.isVisible("#lo_pick")), "linking hidden once the setup period is switched off");
-  const refused = await post("/api/link-old/doc/" + oldGrn.id, { parent_id: null });
+  ok(await p.isVisible("#lo_unlink"), "unlink still offered after the setup period"); await p.screenshot({ path: join(SHOTS, "unlink.png") });
+  await p.click("#lo_unlink"); await p.waitForSelector("text=Link removed");
+  ok(!(await getJ("/api/d/grn/" + oldGrn.id)).doc.parent_id, "GRN unlinked from the PO");
+  const refused = await post("/api/link-old/doc/" + oldGrn.id, { parent_id: po.id });
   ok(/switched off/.test(refused.error || refused.message || ""), "server refuses linking after the period " + JSON.stringify(refused));
 }
 await p.goto(U + "/#/users/new"); await p.waitForSelector("[name=username]");

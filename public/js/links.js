@@ -21,15 +21,31 @@ export async function linksPanel(api, kind, id, onProgress) {
 const LABEL = { quotation: "Quotation", customer_po: "Sales Order", delivery_challan: "Delivery Challan", purchase_order: "Purchase Order", grn: "Goods Receipt" };
 export async function linkOldPanel(api, kind, id, el, { canEdit, onDone }) {
   const r = await api("GET", `/api/link-old/${kind}/${id}`);
-  if (!r.open || !canEdit || !r.types.length || !el) return;
+  if (!canEdit || !r.types.length || !el || (!r.open && !r.current_doc)) return;
   const what = r.types.map((t) => LABEL[t]).join(" or ");
-  el.innerHTML = `<div class="card linkold"><h2>🔗 Link to an earlier ${h(what)}</h2>
+  const cur = r.current_doc ? `<p class="small">Linked to <b>${h(LABEL[r.current_doc.doc_type] || "")} ${h(r.current_doc.ref_no)}</b>.
+      <button type="button" class="btn small danger" id="lo_unlink">✕ Unlink</button>
+      <small class="muted">Removes only the link: both documents stay, and pending quantities and statuses are worked out again.</small></p>` : "";
+  if (!r.open) {
+    el.innerHTML = `<div class="card linkold"><h2>🔗 Link</h2>${cur}<small id="lo_msg"></small></div>`;
+  } else el.innerHTML = `<div class="card linkold"><h2>🔗 Link to an earlier ${h(what)}</h2>${cur}
     <p class="muted small">For entries made before the documents were linked. Open until ${dmy(r.until)} (Company Settings).</p>
     ${r.candidates.length ? `<div class="row"><select id="lo_pick"><option value="">— not linked —</option>
       ${r.candidates.map((c) => `<option value="${c.id}" ${c.id === r.current ? "selected" : ""}>${h(LABEL[c.doc_type])} ${h(c.ref_no)}${c.doc_no && c.doc_no !== c.ref_no ? ` · ${h(c.doc_no)}` : ""} · ${dmy(c.doc_date)} · ${h(c.status)}${c.total_amount ? ` · ${money(c.total_amount)}` : ""}</option>`).join("")}
       </select><button type="button" class="btn small primary" id="lo_save">Save link</button></div><small id="lo_msg"></small>`
       : `<p class="muted small">No ${h(what)} for this party${kind === "invoice" ? " with the same customer PO number" : ""} yet. Enter the old one first, then link it here.</p>`}
     ${kind === "invoice" ? '<small class="muted">Only sales orders with the same customer PO number as this invoice are listed.</small>' : ""}</div>`;
+  const un = el.querySelector("#lo_unlink");
+  if (un) un.onclick = async () => {
+    un.disabled = true;
+    try {
+      const res = await api("POST", `/api/link-old/${kind}/${id}`, { parent_id: null });
+      el.querySelector("#lo_msg").textContent = res.message;
+      un.closest("p").remove();
+      if (el.querySelector("#lo_pick")) el.querySelector("#lo_pick").value = "";
+      if (onDone) onDone();
+    } catch (err) { el.querySelector("#lo_msg").textContent = err.message; un.disabled = false; }
+  };
   const btn = el.querySelector("#lo_save");
   if (btn) btn.onclick = async () => {
     btn.disabled = true;
