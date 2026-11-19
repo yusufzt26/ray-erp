@@ -14,8 +14,9 @@ await db.applyMigrations("./netlify/database/migrations");
 globalThis.__TEST_POOL = new pg.Pool({ connectionString: url, max: 4 });
 const blobs = new Map();
 globalThis.__TEST_BLOBS = {
-  set: async (k, v) => blobs.set(k, v),
-  get: async (k) => blobs.get(k) ?? null,
+  set: async (k, v, o) => blobs.set(k, { v, m: o?.metadata || {} }),
+  get: async (k) => blobs.get(k)?.v ?? null,
+  getWithMetadata: async (k) => (blobs.has(k) ? { data: blobs.get(k).v, metadata: blobs.get(k).m } : null),
   delete: async (k) => blobs.delete(k),
 };
 const { default: handler } = await import("../netlify/functions/api.mts");

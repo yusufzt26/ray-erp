@@ -50,7 +50,7 @@ export async function nextCode(query: (t: string, p?: unknown[]) => Promise<any[
 }
 
 /** Store for uploaded PDFs. Tests can inject one with globalThis.__TEST_BLOBS. */
-export function pdfStore(): { set: Function; get: Function; delete: Function } {
+export function pdfStore(): { set: Function; get: Function; getWithMetadata: Function; delete: Function } {
   const g = globalThis as any;
   if (g.__TEST_BLOBS) return g.__TEST_BLOBS;
   return getStore({ name: "pdf-uploads", consistency: "strong" }) as any;

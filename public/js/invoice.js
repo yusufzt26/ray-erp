@@ -50,6 +50,7 @@ function billToFor(c) {
 
 import { linkOldPanel, linksPanel } from "./links.js";
 import { fitPages, pdfName } from "./printfit.js";
+import { saveSheets } from "./download.js";
 import { payStatus } from "./links.js";
 import { gstStateCode, gstTaxType, gstTotals, periodFilter, segmentChoice, segmentFilter, segmentPill } from "./fields.js";
 
@@ -63,7 +64,8 @@ export function invoicePages(ctx) {
     const { rows } = await api("GET", "/api/invoices?" + new URLSearchParams({ q: qs, segment: seg, period: per, from: pfrom, to: pto }));
     layout(`
       <div class="head"><h1>Sales Invoices <small>(${rows.length})</small></h1>
-        <div class="actions">${can("sales_invoice", "edit") ? '<a class="btn primary" href="#/invoices/new">＋ New Invoice</a>' : ""}</div></div>
+        <div class="actions">${can("sales_invoice", "edit") ? '<a class="btn primary" href="#/invoices/new">＋ New Invoice</a>' : ""}
+          <button class="btn" id="exx">⬇ Excel</button><button class="btn" id="exc">⬇ CSV</button></div></div>
       <form class="filters" id="flt"><input name="q" value="${h(qs)}" placeholder="Search invoice no, PO no or customer…">
         ${periodFilter(per, pfrom, pto)}${segmentFilter(seg)}<button class="btn">Search</button></form>
       <div class="scroll"><table class="grid">
@@ -74,6 +76,20 @@ export function invoicePages(ctx) {
           || '<tr><td colspan="6" class="muted">No invoices yet. Open a Customer PO and press "Make Invoice", or press "New Invoice".</td></tr>'}
       </table></div>`);
     $("#flt").onsubmit = (e) => { e.preventDefault(); location.hash = "#/invoices?" + new URLSearchParams(new FormData(e.target)); };
+    // Download what the list shows (same search and filters), one row per invoice plus an item-wise sheet.
+    const exp = async (fmt) => {
+      const head = ["Invoice No", "Date", "Customer", "GSTIN", "PO No", "PO Date", "Type", "Status", "Taxable value", "CGST", "SGST", "IGST", "Grand Total", "Payment", "Balance"];
+      const sheets = [["Invoices", [head, ...rows.map((r) => [r.inv_no, dmy(r.inv_date), r.customer, r.gstin, r.po_no, dmy(r.po_date), r.segment, r.status,
+        Number(r.subtotal || 0), Number(r.cgst || 0), Number(r.sgst || 0), Number(r.igst || 0), Number(r.total || 0), r.pay_status || "", r.balance > 0.5 ? Number(r.balance) : 0])]]];
+      if (fmt === "xlsx") {
+        const { rows: lines } = await api("GET", "/api/invoices/lines?" + new URLSearchParams({ ids: rows.map((r) => r.id).join(",") }));
+        sheets.push(["Items", [["Invoice No", "Date", "Customer", "Line", "Material Code", "Part No", "Description", "HSN", "Qty", "UOM", "Rate", "Disc %", "Amount", "GST %"],
+          ...lines.map((l) => [l.inv_no, dmy(l.inv_date), l.customer, l.line_no, l.material_code, l.part_no, l.description, l.hsn, Number(l.qty || 0), l.uom, Number(l.rate || 0), Number(l.disc || 0), Number(l.amount || 0), l.gst_rate ?? ""])]]);
+      }
+      await saveSheets(`Sales invoices.${fmt}`, sheets, fmt);
+    };
+    $("#exx").onclick = () => exp("xlsx");
+    $("#exc").onclick = () => exp("csv");
   }
 
   function lineRow(l, products, gst) {

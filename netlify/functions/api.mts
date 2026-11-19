@@ -693,7 +693,8 @@ route("GET", "/api/invoices", async (c) => {
   require(c, "sales_invoice");
   const qs = str(new URL(c.req.url).searchParams.get("q"));
   const params: unknown[] = [];
-  let sql = `SELECT i.id, i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, i.po_no, i.total, i.status, i.segment, cu.name AS customer
+  let sql = `SELECT i.id, i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, i.po_no, to_char(i.po_date, 'YYYY-MM-DD') AS po_date, i.gstin,
+      i.subtotal, i.cgst, i.sgst, i.igst, i.total, i.status, i.segment, cu.name AS customer
     FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id WHERE TRUE`;
   if (qs) { params.push(`%${qs}%`); sql += " AND (i.inv_no ILIKE $1 OR i.po_no ILIKE $1 OR cu.name ILIKE $1)"; }
   const seg = str(new URL(c.req.url).searchParams.get("segment"));
@@ -707,6 +708,41 @@ route("GET", "/api/invoices", async (c) => {
     for (const r of rows) if (st[r.id]) { r.pay_status = st[r.id].pay_status; r.balance = st[r.id].balance; }
   }
   return json({ rows });
+});
+
+route("GET", "/api/invoices/lines", async (c) => {
+  require(c, "sales_invoice");
+  const ids = str(new URL(c.req.url).searchParams.get("ids")).split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 5000);
+  if (!ids.length) return json({ rows: [] });
+  return json({ rows: await q(`SELECT i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, cu.name AS customer, l.line_no, l.material_code, l.part_no,
+      l.description, l.hsn, l.qty, l.uom, l.rate, l.disc, l.amount, COALESCE(l.gst_rate, i.gst_rate) AS gst_rate
+    FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id LEFT JOIN customers cu ON cu.id = i.customer_id
+    WHERE i.id = ANY($1) ORDER BY i.inv_date, i.id, l.line_no`, [ids]) });
+});
+
+// Excel / CSV downloads: the browser sends the finished file once and opens it from a normal link,
+// which works in the installed phone app as well as in a browser.
+route("POST", "/api/download", async (c) => {
+  if (!c.user) fail(401, "Please log in.");
+  const fmt = c.body.fmt === "csv" ? "csv" : "xlsx";
+  const data = str(c.body.data);
+  if (!data || data.length > 8_000_000) fail(400, "File too big to download.");
+  const name = (str(c.body.name) || `export.${fmt}`).replace(/[\\/:*?"<>|\r\n]+/g, " ").slice(0, 120);
+  const key = `dl-${randomUUID()}.${fmt}`;
+  await pdfStore().set(key, Buffer.from(data, "base64"), { metadata: { by: c.user!.id, name } });
+  return json({ url: `/api/download/${key}` });
+});
+route("GET", "/api/download/:key", async (c) => {
+  if (!c.user) fail(401, "Please log in.");
+  if (!/^dl-[0-9a-f-]{36}\.(xlsx|csv)$/.test(c.params.key)) fail(404, "Not found");
+  const r = await pdfStore().getWithMetadata(c.params.key, { type: "arrayBuffer" });
+  if (!r || r.metadata?.by !== c.user!.id) fail(404, "This download has expired. Press the download button again.");
+  const ext = c.params.key.split(".").pop()!;
+  const name = String(r.metadata?.name || `export.${ext}`);
+  return new Response(r.data, { headers: {
+    "content-type": ext === "csv" ? "text/csv; charset=utf-8" : FILE_TYPES.xlsx,
+    "content-disposition": `attachment; filename="${name.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "")}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    "cache-control": "private, no-store" } });
 });
 
 route("GET", "/api/invoices/options", async (c) => {

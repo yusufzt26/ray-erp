@@ -6,6 +6,7 @@ import { linkOldPanel, linksPanel, payStatus } from "./links.js";
 import { docPrint } from "./docprint.js";
 import { ewayPage } from "./eway.js";
 import { attachSuggest } from "./suggest.js";
+import { saveWorkbook } from "./download.js";
 import { bankPages } from "./bank.js";
 import { DASHBOARDS, defaultDash, renderDash } from "./dash.js";
 
@@ -362,7 +363,7 @@ function downloadSheet(aoa, sheetName, filename, fmt, extraSheets = []) {
     s["!cols"] = [{ wch: 30 }, { wch: 90 }];
     XLSX.utils.book_append_sheet(wb, s, name);
   }
-  XLSX.writeFile(wb, filename, { bookType: fmt === "csv" ? "csv" : "xlsx" });
+  return saveWorkbook(wb, filename, fmt);
 }
 
 function templateRows(master) {

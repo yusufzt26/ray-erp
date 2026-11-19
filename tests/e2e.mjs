@@ -564,6 +564,22 @@ await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin
   await p.goto(U + "/#/d/purchase_order/" + gid); await p.waitForSelector("#igst");
   await p.screenshot({ path: join(SHOTS, "po_gst.png"), fullPage: true });
 }
+// Excel downloads come from the server (works in the installed phone app); invoice list has Excel too
+{
+  const XL = (await import("xlsx")).default;
+  await p.waitForTimeout(800); await p.goto(U + "/#/invoices"); await p.waitForSelector("#exx"); await p.waitForTimeout(500);
+  const [d1] = await Promise.all([p.waitForEvent("download"), p.click("#exx")]);
+  ok(d1.suggestedFilename() === "Sales invoices.xlsx" && /\/api\/download\/dl-/.test(d1.url()), "invoice list Excel from the server " + d1.url());
+  const wb1 = XL.readFile(await d1.path());
+  const inv1 = XL.utils.sheet_to_json(wb1.Sheets.Invoices, { header: 1 });
+  ok(wb1.SheetNames.join() === "Invoices,Items" && inv1[0][0] === "Invoice No" && inv1.length > 1 && XL.utils.sheet_to_json(wb1.Sheets.Items).length > 0, "invoice Excel has invoices and items " + inv1.length);
+  const [d2] = await Promise.all([p.waitForEvent("download"), p.click("#exc")]);
+  ok(d2.suggestedFilename() === "Sales invoices.csv", "invoice list CSV");
+  await p.goto(U + "/#/d/purchase_order"); await p.waitForSelector("#exx"); await p.waitForTimeout(500);
+  const [d3] = await Promise.all([p.waitForEvent("download"), p.click("#exx")]);
+  const po1 = XL.utils.sheet_to_json(XL.readFile(await d3.path()).Sheets.Lines, { header: 1 });
+  ok(po1[0][0] === "Ref No" && po1.length > 1, "PO list Excel opens with lines " + po1.length);
+}
 // lists sort by a clicked column heading; new customer gets State and PAN from the GSTIN
 {
   await p.waitForTimeout(800); await p.goto(U + "/#/d/purchase_order?period="); await p.waitForSelector("table.grid tr[data-href]"); await p.waitForTimeout(800);

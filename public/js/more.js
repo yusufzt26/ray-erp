@@ -13,15 +13,7 @@ const fyStart = () => { const d = new Date(); const y = d.getMonth() >= 3 ? d.ge
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const monthName = (ym) => { const [y, m] = ym.split("-"); return `${MONTHS[Number(m) - 1]} ${y}`; };
 
-function saveSheets(filename, sheets, fmt = "xlsx") {
-  const wb = XLSX.utils.book_new();
-  for (const [name, aoa] of fmt === "csv" ? sheets.slice(0, 1) : sheets) {
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = (aoa[0] || []).map((hd) => ({ wch: Math.max(12, Math.min(40, String(hd).length + 4)) }));
-    XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
-  }
-  XLSX.writeFile(wb, filename, { bookType: fmt === "csv" ? "csv" : "xlsx" });
-}
+import { saveSheets } from "./download.js";
 
 /** A delete button that asks "sure?" on the page instead of a popup. */
 function confirmButton(btn, action) {
