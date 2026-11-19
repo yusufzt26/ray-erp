@@ -461,7 +461,7 @@ pages.docList = async (type) => {
       <tr>${d.own ? `<th>${h(d.noLabel)}</th>` : `<th>Our ref</th><th>${h(d.noLabel)}</th>`}<th>${h(d.dateLabel)}</th><th>${d.partyLabel}</th>
         ${withDays ? "<th>Delivery</th>" : ""}<th class="num">Total</th><th>Status</th><th>PDF</th></tr>
       ${rows.map((r) => `<tr class="click" data-href="#/d/${type}/${r.id}">${d.own ? `<td><b>${h(r.ref_no)}</b></td>` : `<td><b>${h(r.ref_no)}</b></td><td>${h(r.doc_no)}</td>`}<td>${h(r.doc_date ? r.doc_date.split("-").reverse().join("/") : "")}</td>
-        <td>${h(r.party_name)}</td>${withDays ? `<td>${r.delivery_days != null ? `${h(r.delivery_days)} days` : ""}</td>` : ""}<td class="num">${money(r.total_amount)}</td><td><span class="pill">${h(r.status)}</span>${segmentPill(r.segment)}</td>
+        <td>${h(r.party_name)}</td>${withDays ? `<td>${r.delivery_days != null ? `${h(r.delivery_days)} days` : ""}</td>` : ""}<td class="num">${money(r.total_amount)}</td><td><span class="pill">${h(r.status)}</span>${segmentPill(r.segment)}${r.pending_qty ? `<br><small class="pend">Pending ${qtyTxt(r.pending_qty)}${r.pending_uom ? " " + h(r.pending_uom) : ""}${r.pending_lines > 1 ? ` (${r.pending_lines} items)` : ""}</small>` : ""}</td>
         <td class="nowrap">${d.printTitle ? `<a class="btn small" href="#/d/${type}/${r.id}/print" title="Open the print page, then Save as PDF">🖨 PDF</a>` : ""}${r.pdf_file ? ' <span title="Uploaded file attached">📄</span>' : ""}</td></tr>`).join("")
         || `<tr><td colspan="9" class="muted">No ${d.title.toLowerCase()} yet.</td></tr>`}
     </table></div>`);

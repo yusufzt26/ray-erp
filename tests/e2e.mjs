@@ -299,6 +299,10 @@ await p.fill("#lines tr:first-child [name=qty]", "300");
 await p.click("button:has-text('Save Goods Receipt')"); await p.waitForSelector("text=GRN-00001 saved");
 const grnId = Number(p.url().split("/").pop());
 ok(await statusOf("purchase_order", poId) === "Partly Received", "PO partly received after GRN");
+{ const r = (await getJ("/api/d/purchase_order")).rows.find((x) => x.id === poId); ok(r.pending_qty > 0, "PO list carries pending qty " + r.pending_qty + " " + r.pending_uom);
+  const back = p.url(); await p.waitForTimeout(1000); await p.goto(U + "/#/d/purchase_order"); await p.waitForSelector("table.grid >> text=Partly Received"); await p.waitForTimeout(500);
+  ok((await p.textContent("main")).includes("Pending " + Number(r.pending_qty).toLocaleString("en-IN")), "PO list shows Pending qty next to Partly Received");
+  await p.screenshot({ path: join(SHOTS, "list_pending.png") }); await p.goto(back); await p.waitForSelector("text=Make Vendor Invoice"); await p.waitForTimeout(800); }
 ok(Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance) === rmBefore + 300, "GRN adds stock");
 await p.click("text=Make Vendor Invoice"); await p.waitForSelector("text=only the quantity still pending");
 await p.fill("[name=doc_no]", "VB-777"); await p.fill("[name=total_amount]", "35400");

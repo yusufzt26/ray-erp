@@ -376,7 +376,18 @@ route("GET", "/api/d/:type", async (c) => {
   if (seg) { params.push(segmentOf(seg)); sql += ` AND segment = $${params.length}`; }
   const since = periodStart(new URL(c.req.url).searchParams.get("period"));
   if (since) { params.push(since); sql += ` AND COALESCE(doc_date, created_at::date) >= $${params.length}`; }
-  return json({ rows: await q(sql + ((DOC_TYPES as any)[c.params.type]?.own ? " ORDER BY ref_no DESC, id DESC" : " ORDER BY id DESC"), params) });
+  const rows = await q(sql + ((DOC_TYPES as any)[c.params.type]?.own ? " ORDER BY ref_no DESC, id DESC" : " ORDER BY id DESC"), params);
+  // Partly dispatched / received: how much is still pending, shown next to the status.
+  for (const r of rows.filter((r: any) => /^Partly/.test(r.status || "")).slice(0, 200)) {
+    const p = await progressOf(q, r.id);
+    if (!p) continue;
+    const open = p.lines.filter((l: any) => l.pending > 0);
+    const uoms = [...new Set(open.map((l: any) => str(l.uom).toUpperCase()))];
+    r.pending_qty = Math.round(open.reduce((t: number, l: any) => t + l.pending, 0) * 1000) / 1000;
+    r.pending_uom = uoms.length === 1 ? uoms[0] : "";
+    r.pending_lines = open.length;
+  }
+  return json({ rows });
 });
 
 route("GET", "/api/d/:type/lines", async (c) => {
