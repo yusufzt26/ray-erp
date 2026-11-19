@@ -26,8 +26,14 @@ export const segmentFilter = (seg) => `<select name="segment" onchange="this.for
 export const segmentChoice = (cur) => `<select name="segment">${SEGMENTS.map(([v, l]) => `<option value="${v}" ${(cur || "Regular") === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
 
 /** Date filter on document lists. "year" is the financial year (April to March). */
-export const PERIODS = [["", "All dates"], ["today", "Today"], ["week", "This week"], ["month", "This month"], ["year", "This financial year"]];
-export const periodFilter = (per) => `<select name="period" onchange="this.form.requestSubmit()" title="Show by date">${PERIODS.map(([v, l]) => `<option value="${v}" ${(per || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+export const PERIODS = [["", "All dates"], ["today", "Today"], ["week", "This week"], ["month", "This month"], ["lastmonth", "Last month"], ["year", "This financial year"], ["custom", "Custom: from … to …"]];
+const dateOnly = (v) => String(v ?? "").replace(/[^0-9-]/g, "");
+/** Date filter for lists; "Custom" shows From and To dates. */
+export const periodFilter = (per, from = "", to = "") => `<select name="period" title="Show by date"
+    onchange="var c=this.value==='custom';this.form.querySelectorAll('.prange').forEach(function(x){x.hidden=!c});if(!c)this.form.requestSubmit()">
+    ${PERIODS.map(([v, l]) => `<option value="${v}" ${(per || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+  <label class="prange" ${per === "custom" ? "" : "hidden"}>From <input type="date" name="from" value="${dateOnly(from)}"></label>
+  <label class="prange" ${per === "custom" ? "" : "hidden"}>To <input type="date" name="to" value="${dateOnly(to)}" onchange="this.form.requestSubmit()"></label>`;
 
 export const BUILTIN_CATEGORIES = ["FG", "SA", "CP", "RM", "BO", "CN", "PK", "SV"];
 export const PRODUCT_CATEGORIES = {

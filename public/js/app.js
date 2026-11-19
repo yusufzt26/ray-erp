@@ -445,8 +445,8 @@ async function sheetToRows(master, file) {
 pages.docList = async (type) => {
   const d = DOC_TYPES[type];
   const sp = new URLSearchParams(location.hash.split("?")[1] || "");
-  const qs = sp.get("q") || "", seg = sp.get("segment") || "", per = sp.get("period") || "";
-  const { rows } = await api("GET", `/api/d/${type}?` + new URLSearchParams({ q: qs, segment: seg, period: per }));
+  const qs = sp.get("q") || "", seg = sp.get("segment") || "", per = sp.get("period") || "", pfrom = sp.get("from") || "", pto = sp.get("to") || "";
+  const { rows } = await api("GET", `/api/d/${type}?` + new URLSearchParams({ q: qs, segment: seg, period: per, from: pfrom, to: pto }));
   const withDays = type === "quotation" || type === "purchase_order";
   layout(`
     <div class="head"><h1>${d.title} <small>(${rows.length})</small></h1>
@@ -456,7 +456,7 @@ pages.docList = async (type) => {
         <button class="btn" id="exx">⬇ Excel</button><button class="btn" id="exc">⬇ CSV</button>
       </div></div>
     <form class="filters" id="flt"><input name="q" value="${h(qs)}" placeholder="Search ${h(d.noLabel)}, ref or ${d.partyLabel.toLowerCase()}…">
-      ${periodFilter(per)}${segmentSelect(seg)}<button class="btn">Search</button></form>
+      ${periodFilter(per, pfrom, pto)}${segmentSelect(seg)}<button class="btn">Search</button></form>
     <div class="scroll"><table class="grid">
       <tr>${d.own ? `<th>${h(d.noLabel)}</th>` : `<th>Our ref</th><th>${h(d.noLabel)}</th>`}<th>${h(d.dateLabel)}</th><th>${d.partyLabel}</th>
         ${withDays ? "<th>Delivery</th>" : ""}<th class="num">Total</th><th>Status</th><th>PDF</th></tr>

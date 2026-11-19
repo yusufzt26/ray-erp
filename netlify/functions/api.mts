@@ -349,15 +349,19 @@ async function ownNumber(query: any, type: string, prefix: string, typed: string
 }
 
 /** First day (India time) of today / this week (from Monday) / this month / this financial year (from 1 April); null = all dates. */
-function periodStart(p: unknown): string | null {
+function periodRange(url: URL): { from: string | null; to: string | null } {
+  const p = url.searchParams.get("period");
   const today = new Date(Date.now() + 5.5 * 3600e3);
   const iso = (d: Date) => d.toISOString().slice(0, 10);
   const y = today.getUTCFullYear(), m = today.getUTCMonth();
-  if (p === "today") return iso(today);
-  if (p === "week") return iso(new Date(today.getTime() - ((today.getUTCDay() + 6) % 7) * 864e5));
-  if (p === "month") return iso(new Date(Date.UTC(y, m, 1)));
-  if (p === "year") return iso(new Date(Date.UTC(m >= 3 ? y : y - 1, 3, 1)));
-  return null;
+  const day = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  if (p === "today") return { from: iso(today), to: null };
+  if (p === "week") return { from: iso(new Date(today.getTime() - ((today.getUTCDay() + 6) % 7) * 864e5)), to: null };
+  if (p === "month") return { from: iso(new Date(Date.UTC(y, m, 1))), to: null };
+  if (p === "lastmonth") return { from: iso(new Date(Date.UTC(y, m - 1, 1))), to: iso(new Date(Date.UTC(y, m, 0))) };
+  if (p === "year") return { from: iso(new Date(Date.UTC(m >= 3 ? y : y - 1, 3, 1))), to: null };
+  if (p === "custom") return { from: day(url.searchParams.get("from")), to: day(url.searchParams.get("to")) };
+  return { from: null, to: null };
 }
 
 /** "10", "10 days", " 30 " -> 10; blank -> null. */
@@ -374,8 +378,9 @@ route("GET", "/api/d/:type", async (c) => {
   if (qs) { params.push(`%${qs}%`); sql += ` AND (doc_no ILIKE $${params.length} OR ref_no ILIKE $${params.length} OR party_name ILIKE $${params.length})`; }
   const seg = str(new URL(c.req.url).searchParams.get("segment"));
   if (seg) { params.push(segmentOf(seg)); sql += ` AND segment = $${params.length}`; }
-  const since = periodStart(new URL(c.req.url).searchParams.get("period"));
-  if (since) { params.push(since); sql += ` AND COALESCE(doc_date, created_at::date) >= $${params.length}`; }
+  const range = periodRange(new URL(c.req.url));
+  if (range.from) { params.push(range.from); sql += ` AND COALESCE(doc_date, created_at::date) >= $${params.length}`; }
+  if (range.to) { params.push(range.to); sql += ` AND COALESCE(doc_date, created_at::date) <= $${params.length}`; }
   const rows = await q(sql + ((DOC_TYPES as any)[c.params.type]?.own ? " ORDER BY ref_no DESC, id DESC" : " ORDER BY id DESC"), params);
   // Partly dispatched / received: how much is still pending, shown next to the status.
   for (const r of rows.filter((r: any) => /^Partly/.test(r.status || "")).slice(0, 200)) {
@@ -682,8 +687,9 @@ route("GET", "/api/invoices", async (c) => {
   if (qs) { params.push(`%${qs}%`); sql += " AND (i.inv_no ILIKE $1 OR i.po_no ILIKE $1 OR cu.name ILIKE $1)"; }
   const seg = str(new URL(c.req.url).searchParams.get("segment"));
   if (seg) { params.push(segmentOf(seg)); sql += ` AND i.segment = $${params.length}`; }
-  const since = periodStart(new URL(c.req.url).searchParams.get("period"));
-  if (since) { params.push(since); sql += ` AND i.inv_date >= $${params.length}`; }
+  const range = periodRange(new URL(c.req.url));
+  if (range.from) { params.push(range.from); sql += ` AND i.inv_date >= $${params.length}`; }
+  if (range.to) { params.push(range.to); sql += ` AND i.inv_date <= $${params.length}`; }
   const rows = await q(sql + " ORDER BY i.id DESC", params);
   if (c.perms.accounts !== "none") {
     const st = Object.fromEntries((await billStatus("in")).rows.map((r) => [r.id, r]));

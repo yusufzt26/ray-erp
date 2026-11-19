@@ -470,6 +470,17 @@ ok((await p.textContent(".suggest")).includes("SAC-FL-0812"), "part no suggestio
   ok((await getJ("/api/invoices?period=today")).rows.length <= (await getJ("/api/invoices")).rows.length, "invoice list takes the date filter");
   await p.goto(U + "/#/d/customer_po?period=month"); await p.waitForSelector("select[name=period]");
   ok(await p.inputValue("select[name=period]") === "month", "sales order list shows the date filter");
+  const rng = async (qs) => (await getJ("/api/d/purchase_order?" + qs)).rows.map((r) => r.id);
+  const lastM = await rng("period=lastmonth");
+  ok(!lastM.includes(ex.id) && !lastM.includes(old.id), "last month leaves out this month and old POs");
+  ok((await rng("period=custom&from=2024-01-01&to=2024-01-31")).includes(old.id) && !(await rng("period=custom&from=2024-01-01&to=2024-01-31")).includes(ex.id), "custom from/to finds the January 2024 PO only");
+  await p.goto(U + "/#/d/purchase_order"); await p.waitForSelector("select[name=period]"); await p.waitForTimeout(500);
+  await p.selectOption("select[name=period]", "custom");
+  ok(await p.isVisible("input[name=from]") && await p.isVisible("input[name=to]"), "custom shows From and To dates");
+  await p.fill("input[name=from]", "2024-01-01"); await p.fill("input[name=to]", "2024-01-31"); await p.dispatchEvent("input[name=to]", "change");
+  await p.waitForFunction(() => location.hash.includes("from=2024-01-01") && !document.querySelector("main").textContent.includes("Office Supplier"), null, { timeout: 8000 }).catch(() => {}); await p.waitForTimeout(500);
+  ok(!(await p.textContent("main")).includes("Office Supplier"), "custom range applied on the list");
+  await p.screenshot({ path: join(SHOTS, "date_custom.png") });
   await p.goto(U + "/#/d/purchase_order?segment=Expense"); await p.waitForSelector(".pill.exp");
   ok(await p.isVisible("select[name=segment] >> text=Expenses") || (await p.inputValue("select[name=segment]")) === "Expense", "Expenses offered in the type filter");
 }
