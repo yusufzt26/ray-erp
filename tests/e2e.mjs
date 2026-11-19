@@ -602,6 +602,13 @@ await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin
   ok(true, "linked documents show the PO next to the old GRN");
   await p.screenshot({ path: join(SHOTS, "link_old_grn.png"), fullPage: true });
   const inv = (await getJ("/api/invoices")).rows.find((r) => r.status !== "Cancelled");
+  { const so = (await getJ("/api/d/customer_po")).rows.find((r) => r.doc_no);
+    const soDoc = (await getJ("/api/d/customer_po/" + so.id)).doc;
+    const bad = await post("/api/invoices/save", { customer_id: soDoc.party_id, inv_date: "2026-11-19", customer_po_id: so.id, po_no: "WRONG-99999", lines: [{ description: "x", qty: 1, rate: 1 }] });
+    ok(/does not match/.test(bad.error || ""), "invoice refused for a sales order with a different customer PO no " + JSON.stringify(bad));
+    const opts = await getJ(`/api/link-old/invoice/${inv.id}`);
+    const invPo = (await getJ("/api/invoices/" + inv.id)).inv.po_no;
+    ok(opts.candidates.every((c) => !c.cust_po || !invPo || c.cust_po.replace(/[^A-Z0-9]/gi, "").toUpperCase().startsWith(invPo.replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 6))), "link list offers only matching customer PO numbers"); }
   await p.goto(U + "/#/invoices/" + inv.id); await p.waitForSelector("#links");
   await p.waitForTimeout(800);
   if (await p.isVisible("#lo_pick")) {

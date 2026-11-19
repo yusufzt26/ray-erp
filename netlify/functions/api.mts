@@ -766,6 +766,11 @@ route("POST", "/api/invoices/save", async (c) => {
   const total = g.total;
   const packing = (Array.isArray(b.packing) ? b.packing : []).slice(0, 200)
     .map((p: any) => ({ line: num(p.line), qty: num(p.qty) })).filter((p: any) => p.line && p.qty);
+  if (num(b.customer_po_id)) {
+    const so = await one("SELECT ref_no, doc_no FROM documents WHERE id = $1 AND doc_type = 'customer_po'", [num(b.customer_po_id)]);
+    if (so && !samePoNo(b.po_no, so.doc_no))
+      fail(400, `PO Number ${str(b.po_no)} does not match sales order ${so.ref_no} (customer PO ${so.doc_no}). Correct the PO Number, or make the invoice without that sales order.`);
+  }
   const header: any = {
     inv_date: invDate, customer_id: customerId, customer_po_id: num(b.customer_po_id), po_no: str(b.po_no) || null,
     po_date: isoDate(b.po_date), supplier_code: str(b.supplier_code) || null, bill_to: str(b.bill_to), ship_to: str(b.ship_to),
@@ -900,6 +905,16 @@ async function refreshStatus(query: any, docId: number) {
     await query("UPDATE documents SET status = $1 WHERE id = $2", [st, docId]);
 }
 
+/** Customer PO numbers match: same letters and digits (spaces, "/" and "-" ignored); an amendment suffix like "/0" or "-A1" is allowed. */
+function samePoNo(a: unknown, b: unknown) {
+  const n = (v: unknown) => str(v).toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const x = n(a), y = n(b);
+  if (!x || !y) return true; // nothing to compare
+  if (x === y) return true;
+  const [s1, l1] = x.length < y.length ? [x, y] : [y, x];
+  return s1.length >= 6 && l1.startsWith(s1) && l1.length - s1.length <= 3;
+}
+
 // ---------------------------------------------------------------- linking earlier documents
 // For a setup period (until the date in Company Settings), any document or invoice can be tied
 // to the earlier document it came from, so old entries join the same chain as new ones.
@@ -915,20 +930,23 @@ async function linkSubject(c: any) {
   const id = Number(c.params.id);
   if (c.params.kind === "invoice") {
     require(c, "sales_invoice");
-    const inv = await one("SELECT id, customer_id, customer_po_id, challan_id FROM invoices WHERE id = $1", [id]);
+    const inv = await one("SELECT id, customer_id, customer_po_id, challan_id, po_no FROM invoices WHERE id = $1", [id]);
     if (!inv) fail(404, "Not found");
     const cu = await one("SELECT name FROM customers WHERE id = $1", [inv.customer_id]);
-    return { type: "invoice", perm: "sales_invoice", id, partyId: inv.customer_id, partyName: cu?.name || "", current: inv.challan_id || inv.customer_po_id || null };
+    return { type: "invoice", perm: "sales_invoice", id, partyId: inv.customer_id, partyName: cu?.name || "", current: inv.challan_id || inv.customer_po_id || null, poNo: inv.po_no || "" };
   }
   const d = await one("SELECT id, doc_type, party_id, party_name, parent_id FROM documents WHERE id = $1", [id]);
   if (!d) fail(404, "Not found");
   require(c, d.doc_type);
   return { type: d.doc_type, perm: d.doc_type, id, partyId: d.party_id, partyName: d.party_name || "", current: d.parent_id || null };
 }
-const linkCandidates = (s: any) => q(`SELECT id, doc_type, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS doc_date, status, total_amount
-    FROM documents WHERE doc_type = ANY($1) AND id <> $2
+const linkCandidates = async (s: any) => (await q(`SELECT d.id, d.doc_type, d.ref_no, d.doc_no, to_char(d.doc_date, 'YYYY-MM-DD') AS doc_date, d.status, d.total_amount,
+      CASE WHEN d.doc_type = 'customer_po' THEN d.doc_no ELSE (SELECT doc_no FROM documents s WHERE s.id = d.parent_id AND s.doc_type = 'customer_po') END AS cust_po
+    FROM documents d WHERE doc_type = ANY($1) AND id <> $2
       AND (($3::int IS NOT NULL AND party_id = $3) OR (LOWER(COALESCE(party_name, '')) = LOWER($4) AND $4 <> ''))
-    ORDER BY doc_date DESC NULLS LAST, id DESC LIMIT 300`, [LINK_PARENTS[s.type] || [], s.type === "invoice" ? 0 : s.id, s.partyId || null, s.partyName]);
+    ORDER BY doc_date DESC NULLS LAST, id DESC LIMIT 300`, [LINK_PARENTS[s.type] || [], s.type === "invoice" ? 0 : s.id, s.partyId || null, s.partyName]))
+  // a sales invoice links only to the sales order (or its challan) with the same customer PO number
+  .filter((r: any) => s.type !== "invoice" || !s.poNo || samePoNo(s.poNo, r.cust_po));
 
 route("GET", "/api/link-old/:kind/:id", async (c) => {
   const s = await linkSubject(c);

@@ -28,7 +28,8 @@ export async function linkOldPanel(api, kind, id, el, { canEdit, onDone }) {
     ${r.candidates.length ? `<div class="row"><select id="lo_pick"><option value="">— not linked —</option>
       ${r.candidates.map((c) => `<option value="${c.id}" ${c.id === r.current ? "selected" : ""}>${h(LABEL[c.doc_type])} ${h(c.ref_no)}${c.doc_no && c.doc_no !== c.ref_no ? ` · ${h(c.doc_no)}` : ""} · ${dmy(c.doc_date)} · ${h(c.status)}${c.total_amount ? ` · ${money(c.total_amount)}` : ""}</option>`).join("")}
       </select><button type="button" class="btn small primary" id="lo_save">Save link</button></div><small id="lo_msg"></small>`
-      : `<p class="muted small">No ${h(what)} for this party yet. Enter the old one first, then link it here.</p>`}</div>`;
+      : `<p class="muted small">No ${h(what)} for this party${kind === "invoice" ? " with the same customer PO number" : ""} yet. Enter the old one first, then link it here.</p>`}
+    ${kind === "invoice" ? '<small class="muted">Only sales orders with the same customer PO number as this invoice are listed.</small>' : ""}</div>`;
   const btn = el.querySelector("#lo_save");
   if (btn) btn.onclick = async () => {
     btn.disabled = true;
