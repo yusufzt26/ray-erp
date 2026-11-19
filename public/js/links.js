@@ -5,11 +5,13 @@ const money = (n) => (n === null || n === undefined ? "" : "₹ " + Number(n).to
 const qty = (n) => Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 3 });
 
 export async function linksPanel(api, kind, id, onProgress) {
+  apiRef = api;
   const { items, progress } = await api("GET", `/api/links/${kind}/${id}`);
   if (onProgress && progress) onProgress(progress);
   const chain = items.length > 1 ? `<div class="chain">${items.map((it, i) => `${i ? '<span class="arrow">→</span>' : ""}
-    <a class="link-card ${it.current ? "current" : ""}" href="${it.href}"><small>${h(it.label)}</small><b>${h(it.ref)}</b>
-      ${it.no ? `<small>${h(it.no)}</small>` : ""}<small>${dmy(it.day)} · ${h(it.status)}${it.amount ? ` · ${money(it.amount)}` : ""}</small></a>`).join("")}</div>`
+    <span class="link-wrap"><a class="link-card ${it.current ? "current" : ""}" href="${it.href}"><small>${h(it.label)}</small><b>${h(it.ref)}</b>
+      ${it.no ? `<small>${h(it.no)}</small>` : ""}<small>${dmy(it.day)} · ${h(it.status)}${it.amount ? ` · ${money(it.amount)}` : ""}</small></a>
+      ${it.unlink ? `<button type="button" class="unlink" data-unlink="${h(it.unlink)}" data-ref="${h(it.ref)}" title="Remove this link (the document stays)">✕ Unlink</button>` : ""}</span>`).join("")}</div>`
     : '<p class="muted small">Nothing linked yet. Use the buttons at the top to make the next document.</p>';
   const prog = progress && progress.length ? `<div class="scroll"><table class="grid mini"><tr><th>Item</th><th class="num">Ordered</th><th class="num">Done</th><th class="num">Pending</th></tr>
     ${progress.map((l) => `<tr><td>${h(l.description)}</td><td class="num">${qty(l.qty)} ${h(l.uom || "")}</td><td class="num">${qty(l.done)}</td>
@@ -57,6 +59,19 @@ export async function linkOldPanel(api, kind, id, el, { canEdit, onDone }) {
     btn.disabled = false;
   };
 }
+
+// "✕ Unlink" under a card in the linked documents chain: removes only that link, then redraws the page.
+let apiRef = null;
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-unlink]");
+  if (!b || !apiRef) return;
+  if (!confirm(`Unlink ${b.dataset.ref}? The document stays; only the link is removed.`)) return;
+  b.disabled = true;
+  try {
+    await apiRef("POST", `/api/link-old/${b.dataset.unlink}`, { parent_id: null });
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  } catch (err) { b.disabled = false; b.textContent = err.message; }
+});
 
 // "Paid ₹X · Balance ₹Y" strip for a sales invoice (dir in) or vendor bill (dir out).
 export async function payStatus(api, dir, id) {

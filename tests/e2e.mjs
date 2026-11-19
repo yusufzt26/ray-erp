@@ -601,6 +601,12 @@ await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin
   await p.waitForSelector(`#links >> text=${po.ref_no}`);
   ok(true, "linked documents show the PO next to the old GRN");
   await p.screenshot({ path: join(SHOTS, "link_old_grn.png"), fullPage: true });
+  await p.goto(U + "/#/d/purchase_order/" + po.id); await p.waitForSelector(`button[data-unlink="doc/${oldGrn.id}"]`);
+  await p.screenshot({ path: join(SHOTS, "unlink_chain.png"), fullPage: true });
+  await p.click(`button[data-unlink="doc/${oldGrn.id}"]`);
+  await p.waitForFunction(async (g) => !(await (await fetch("/api/d/grn/" + g)).json()).doc.parent_id, oldGrn.id, { timeout: 8000 }).catch(() => {});
+  ok(!(await getJ("/api/d/grn/" + oldGrn.id)).doc.parent_id, "Unlink from the PO's linked documents removes the GRN link");
+  await post("/api/link-old/doc/" + oldGrn.id, { parent_id: po.id });
   const inv = (await getJ("/api/invoices")).rows.find((r) => r.status !== "Cancelled");
   { const so = (await getJ("/api/d/customer_po")).rows.find((r) => r.doc_no);
     const soDoc = (await getJ("/api/d/customer_po/" + so.id)).doc;

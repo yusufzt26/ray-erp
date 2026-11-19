@@ -1068,16 +1068,19 @@ route("GET", "/api/links/:kind/:id", async (c) => {
   }
   const docs = docIds.size ? await q(`SELECT id, doc_type, ref_no, doc_no, to_char(doc_date, 'YYYY-MM-DD') AS day, status, total_amount AS amount, parent_id
     FROM documents WHERE id = ANY($1)`, [[...docIds]]) : [];
-  const invs = invIds.size ? await q(`SELECT id, inv_no, to_char(inv_date, 'YYYY-MM-DD') AS day, status, total AS amount, customer_id FROM invoices WHERE id = ANY($1)`, [[...invIds]]) : [];
+  const invs = invIds.size ? await q(`SELECT id, inv_no, to_char(inv_date, 'YYYY-MM-DD') AS day, status, total AS amount, customer_id, customer_po_id, challan_id FROM invoices WHERE id = ANY($1)`, [[...invIds]]) : [];
+  const canEdit = (t: string) => c.perms[t] === "edit";
   const order = ["quotation", "customer_po", "purchase_order", "delivery_challan", "grn", "vendor_invoice"];
   const items = [
     ...docs.filter((d) => c.perms[d.doc_type] && c.perms[d.doc_type] !== "none").map((d) => ({
       type: d.doc_type, label: (DOC_TYPES as any)[d.doc_type].singular, ref: d.ref_no, no: d.doc_no !== d.ref_no ? d.doc_no : "",
       day: d.day, status: d.status, amount: d.amount, href: `#/d/${d.doc_type}/${d.id}`, current: c.params.kind === "doc" && d.id === id, rank: order.indexOf(d.doc_type),
+      unlink: d.parent_id && canEdit(d.doc_type) ? `doc/${d.id}` : null,
     })),
     ...(c.perms.sales_invoice !== "none" ? invs : []).map((v) => ({
       type: "invoice", label: "Sales Invoice", ref: v.inv_no, no: "", day: v.day, status: v.status, amount: v.amount,
       href: `#/invoices/${v.id}`, current: c.params.kind === "invoice" && v.id === id, rank: 9,
+      unlink: (v.customer_po_id || v.challan_id) && canEdit("sales_invoice") ? `invoice/${v.id}` : null,
     })),
   ].sort((a, b) => a.rank - b.rank || String(a.day).localeCompare(String(b.day)));
   let progress = null;

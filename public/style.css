@@ -334,3 +334,6 @@ table.grid th[data-sort="desc"]::after { content: " ▼"; font-size: .7em; }
 .linkold select { max-width: 100%; min-width: 0; flex: 1 1 320px; }
 .filters .prange { display: inline-flex; align-items: center; gap: .3rem; font-size: .9rem; }
 .filters .prange input { width: auto; }
+.link-wrap { display: inline-flex; flex-direction: column; align-items: flex-start; gap: .25rem; }
+button.unlink { background: none; border: 0; color: #b42318; font-size: .8rem; cursor: pointer; padding: 0 .2rem; }
+button.unlink:hover { text-decoration: underline; }
