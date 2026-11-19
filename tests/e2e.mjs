@@ -572,6 +572,8 @@ await p.fill("[name=username]", "admin"); await p.fill("[name=password]", "admin
   ok(d1.suggestedFilename() === "Sales invoices.xlsx" && /\/api\/download\/dl-/.test(d1.url()), "invoice list Excel from the server " + d1.url());
   const wb1 = XL.readFile(await d1.path());
   const inv1 = XL.utils.sheet_to_json(wb1.Sheets.Invoices, { header: 1 });
+  ok(inv1[0][4] === "Customer PO No" && inv1.slice(1).some((r) => String(r[4] || "").trim()), "invoice Excel has Customer PO No");
+  ok(inv1[0][2] === "Customer" && inv1.slice(1).every((r) => String(r[2] || "").trim()), "invoice Excel: customer filled on every row " + JSON.stringify(inv1[1]));
   ok(wb1.SheetNames.join() === "Invoices,Items" && inv1[0][0] === "Invoice No" && inv1.length > 1 && XL.utils.sheet_to_json(wb1.Sheets.Items).length > 0, "invoice Excel has invoices and items " + inv1.length);
   const [d2] = await Promise.all([p.waitForEvent("download"), p.click("#exc")]);
   ok(d2.suggestedFilename() === "Sales invoices.csv", "invoice list CSV");

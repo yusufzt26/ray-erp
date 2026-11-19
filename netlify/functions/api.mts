@@ -693,9 +693,12 @@ route("GET", "/api/invoices", async (c) => {
   require(c, "sales_invoice");
   const qs = str(new URL(c.req.url).searchParams.get("q"));
   const params: unknown[] = [];
-  let sql = `SELECT i.id, i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, i.po_no, to_char(i.po_date, 'YYYY-MM-DD') AS po_date, i.gstin,
-      i.subtotal, i.cgst, i.sgst, i.igst, i.total, i.status, i.segment, cu.name AS customer
-    FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id WHERE TRUE`;
+  let sql = `SELECT i.id, i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, COALESCE(NULLIF(i.po_no, ''), so.doc_no) AS po_no,
+      to_char(COALESCE(i.po_date, so.doc_date), 'YYYY-MM-DD') AS po_date, so.ref_no AS so_ref, i.gstin,
+      i.subtotal, i.cgst, i.sgst, i.igst, i.total, i.status, i.segment,
+      COALESCE(NULLIF(cu.name, ''), NULLIF(SPLIT_PART(COALESCE(i.bill_to, ''), E'\n', 1), ''), '') AS customer
+    FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id
+      LEFT JOIN documents so ON so.id = i.customer_po_id AND so.doc_type = 'customer_po' WHERE TRUE`;
   if (qs) { params.push(`%${qs}%`); sql += " AND (i.inv_no ILIKE $1 OR i.po_no ILIKE $1 OR cu.name ILIKE $1)"; }
   const seg = str(new URL(c.req.url).searchParams.get("segment"));
   if (seg) { params.push(segmentOf(seg)); sql += ` AND i.segment = $${params.length}`; }
@@ -714,7 +717,7 @@ route("GET", "/api/invoices/lines", async (c) => {
   require(c, "sales_invoice");
   const ids = str(new URL(c.req.url).searchParams.get("ids")).split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 5000);
   if (!ids.length) return json({ rows: [] });
-  return json({ rows: await q(`SELECT i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, cu.name AS customer, l.line_no, l.material_code, l.part_no,
+  return json({ rows: await q(`SELECT i.inv_no, to_char(i.inv_date, 'YYYY-MM-DD') AS inv_date, COALESCE(NULLIF(cu.name, ''), SPLIT_PART(COALESCE(i.bill_to, ''), E'\n', 1)) AS customer, l.line_no, l.material_code, l.part_no,
       l.description, l.hsn, l.qty, l.uom, l.rate, l.disc, l.amount, COALESCE(l.gst_rate, i.gst_rate) AS gst_rate
     FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id LEFT JOIN customers cu ON cu.id = i.customer_id
     WHERE i.id = ANY($1) ORDER BY i.inv_date, i.id, l.line_no`, [ids]) });

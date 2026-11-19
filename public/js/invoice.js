@@ -78,9 +78,10 @@ export function invoicePages(ctx) {
     $("#flt").onsubmit = (e) => { e.preventDefault(); location.hash = "#/invoices?" + new URLSearchParams(new FormData(e.target)); };
     // Download what the list shows (same search and filters), one row per invoice plus an item-wise sheet.
     const exp = async (fmt) => {
-      const head = ["Invoice No", "Date", "Customer", "GSTIN", "PO No", "PO Date", "Type", "Status", "Taxable value", "CGST", "SGST", "IGST", "Grand Total", "Payment", "Balance"];
-      const sheets = [["Invoices", [head, ...rows.map((r) => [r.inv_no, dmy(r.inv_date), r.customer, r.gstin, r.po_no, dmy(r.po_date), r.segment, r.status,
-        Number(r.subtotal || 0), Number(r.cgst || 0), Number(r.sgst || 0), Number(r.igst || 0), Number(r.total || 0), r.pay_status || "", r.balance > 0.5 ? Number(r.balance) : 0])]]];
+      const head = ["Invoice No", "Date", "Customer", "GSTIN", "Customer PO No", "Customer PO Date", "Sales Order", "Type", "Status", "Taxable value", "CGST", "SGST", "IGST", "Grand Total", "Payment", "Balance"];
+      const widths = head.map((x) => ({ wch: x === "Customer" ? 40 : x === "GSTIN" || x === "Customer PO No" ? 20 : Math.max(12, x.length + 3) }));
+      const sheets = [["Invoices", [head, ...rows.map((r) => [r.inv_no, dmy(r.inv_date), r.customer, r.gstin, r.po_no || "", dmy(r.po_date), r.so_ref || "", r.segment, r.status,
+        Number(r.subtotal || 0), Number(r.cgst || 0), Number(r.sgst || 0), Number(r.igst || 0), Number(r.total || 0), r.pay_status || "", r.balance > 0.5 ? Number(r.balance) : 0])], widths]];
       if (fmt === "xlsx") {
         const { rows: lines } = await api("GET", "/api/invoices/lines?" + new URLSearchParams({ ids: rows.map((r) => r.id).join(",") }));
         sheets.push(["Items", [["Invoice No", "Date", "Customer", "Line", "Material Code", "Part No", "Description", "HSN", "Qty", "UOM", "Rate", "Disc %", "Amount", "GST %"],
