@@ -75,7 +75,9 @@ function layout(body) {
     ${navGroup("Purchase", "purchase", "")}
     ${can("stock") || can("production") || can("sales_invoice") || can("accounts") ? '<div class="sec">Stock & Accounts</div>' : ""}
     ${can("stock") ? `<a href="#/stock" class="${on("#/stock")}">📊 Stock</a>` : ""}
-    ${can("production") ? `<a href="#/production" class="${on("#/production")}">🗓️ Production Plan</a>` : ""}
+    ${can("production") ? `<a href="#/production" class="${r.startsWith("#/production") && !r.startsWith("#/production/daily") && !r.startsWith("#/production/log") ? "on" : ""}">🗓️ Production Plan</a>
+      ${can("production", "edit") ? `<a href="#/production/daily" class="${on("#/production/daily")}">📝 Daily Production</a>` : ""}
+      <a href="#/production/log" class="${on("#/production/log")}">📋 Production Log</a>` : ""}
     ${can("sales_invoice") ? `<a href="#/sales-register" class="${on("#/sales-register")}">📈 Sales Register</a>` : ""}
     ${can("accounts") ? `<a href="#/accounts" class="${on("#/accounts") || on("#/payments")}">💰 Accounts</a>
       <a href="#/bank" class="${on("#/bank")}">🏦 Bank</a>` : ""}
@@ -135,6 +137,7 @@ pages.login = () => {
 pages.dashboard = async () => {
   const quick = [
     can("sales_invoice", "edit") && ["#/invoices/new", "🧾 New Sales Invoice", "From a customer PO"],
+    can("production", "edit") && ["#/production/daily", "📝 Daily Production", "Enter what was made today"],
     can("production") && ["#/production", "🗓️ Production Plan", can("production", "edit") ? "Plan the week, log what's done" : "Planned vs done"],
     can("stock", "edit") && ["#/stock/entry", "📊 Stock Entry", "Opening, production, issue"],
     can("accounts", "edit") && ["#/payments/new?dir=in", "💰 Payment Received", "From a customer"],
@@ -986,7 +989,7 @@ pages.notFound = () => layout(`<h1>Page not found</h1><p><a class="btn" href="#/
 
 const more = morePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 const bank = bankPages({ api, layout, can, flash, $, $$, errorBox, busy });
-const plan = planPages({ api, layout, can, flash, $, $$, errorBox, busy, forbidden: () => pages.forbidden() });
+const plan = planPages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 const inv = invoicePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 
 // ------------------------------------------------------------------ router
@@ -1045,6 +1048,8 @@ async function routeInner() {
     }
     if (p[0] === "production") {
       if (!can("production")) return pages.forbidden();
+      if (p[1] === "daily") return await plan.daily();
+      if (p[1] === "log") return await plan.log();
       return p[2] === "edit" ? await plan.edit(p[1]) : await plan.board();
     }
     if (p[0] === "eway" && p[2]) {

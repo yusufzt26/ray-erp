@@ -1278,7 +1278,7 @@ route("GET", "/api/production", async (c) => {
   const plan = await one(`SELECT pl.id, pl.period, pl.status, pl.notes, to_char(pl.start_date, 'YYYY-MM-DD') AS start_date, u.full_name AS by_user
     FROM production_plans pl LEFT JOIN users u ON u.id = pl.created_by WHERE pl.period = $1 AND pl.start_date = $2`, [period, start]);
   const lines = plan ? await q(PLAN_LINES_SQL + " WHERE l.plan_id = $1 ORDER BY l.line_no, l.id", [plan.id]) : [];
-  const logs = lines.length ? await q(`SELECT g.id, g.line_id, to_char(g.log_date, 'YYYY-MM-DD') AS log_date, g.qty, u.full_name AS by_user
+  const logs = lines.length ? await q(`SELECT g.id, g.line_id, to_char(g.log_date, 'YYYY-MM-DD') AS log_date, g.qty, g.shift, g.operator, g.remarks, u.full_name AS by_user
     FROM production_logs g LEFT JOIN users u ON u.id = g.created_by WHERE g.line_id = ANY($1) ORDER BY g.log_date, g.id`, [lines.map((l) => l.id)]) : [];
   for (const l of lines) { l.done = Number(l.done); l.planned_qty = Number(l.planned_qty); l.logs = logs.filter((g) => g.line_id === l.id); }
   const others = await q(PLAN_TOTALS_SQL + " GROUP BY pl.id ORDER BY pl.start_date DESC, pl.period LIMIT 12", [todayIso()]);
@@ -1301,6 +1301,42 @@ route("POST", "/api/production", async (c) => {
   if (have) return json({ id: have.id });
   const row = await one("INSERT INTO production_plans (period, start_date, end_date, created_by) VALUES ($1,$2,$3,$4) RETURNING id", [period, start, end, c.user!.id]);
   return json({ id: row.id });
+});
+
+// (fixed paths first: /:id would otherwise catch them)
+/** Open rows of released plans covering a day, for the daily entry screen to count entries toward. */
+route("GET", "/api/production/open-lines", async (c) => {
+  require(c, "production", "edit");
+  const day = isoDate(new URL(c.req.url).searchParams.get("date")) || todayIso();
+  const rows = await q(`SELECT l.id, l.product_id, pl.period, to_char(pl.start_date, 'YYYY-MM-DD') AS start_date, to_char(pl.end_date, 'YYYY-MM-DD') AS end_date,
+      l.planned_qty, to_char(l.target_date, 'YYYY-MM-DD') AS target_date, d.doc_no AS order_no,
+      COALESCE((SELECT SUM(g.qty) FROM production_logs g WHERE g.line_id = l.id), 0) AS done
+    FROM production_plan_lines l JOIN production_plans pl ON pl.id = l.plan_id LEFT JOIN documents d ON d.id = l.order_id
+    WHERE pl.status = 'Released' AND pl.start_date <= $1 AND pl.end_date >= $1
+    ORDER BY (pl.period = 'week') DESC, l.target_date NULLS LAST, l.id`, [day]);
+  return json({ rows: rows.map((r) => ({ ...r, planned_qty: Number(r.planned_qty), done: Number(r.done) })) });
+});
+
+/** Production log: every entry, to trace what was made, when, by whom, against which plan and order. */
+route("GET", "/api/production/log", async (c) => {
+  require(c, "production");
+  const sp = new URL(c.req.url).searchParams;
+  const params: unknown[] = [isoDate(sp.get("from")) || "2000-01-01", isoDate(sp.get("to")) || "2999-12-31"];
+  let where = "g.log_date BETWEEN $1 AND $2";
+  if (num(sp.get("product"))) { params.push(num(sp.get("product"))); where += ` AND g.product_id = $${params.length}`; }
+  if (str(sp.get("shift"))) { params.push(str(sp.get("shift"))); where += ` AND g.shift = $${params.length}`; }
+  if (str(sp.get("q"))) { params.push(`%${str(sp.get("q"))}%`); where += ` AND (g.operator ILIKE $${params.length} OR g.remarks ILIKE $${params.length} OR p.code ILIKE $${params.length} OR p.name ILIKE $${params.length})`; }
+  const rows = await q(`SELECT g.id, to_char(g.log_date, 'YYYY-MM-DD') AS log_date, g.qty, g.shift, g.operator, g.remarks, g.batch, g.line_id,
+      p.id AS product_id, p.code, p.name, p.uom, pl.period, to_char(pl.start_date, 'YYYY-MM-DD') AS plan_start, to_char(pl.end_date, 'YYYY-MM-DD') AS plan_end,
+      l.order_id, d.doc_no AS order_no, d.party_name AS order_party, u.full_name AS by_user,
+      to_char(g.created_at AT TIME ZONE 'Asia/Kolkata', 'DD/MM/YYYY HH24:MI') AS entered_at,
+      (SELECT string_agg(cp.code || ' ' || m.qty, ', ' ORDER BY m.id) FROM stock_moves m JOIN products cp ON cp.id = m.product_id WHERE m.batch = g.batch AND m.kind = 'Consumed') AS consumed
+    FROM production_logs g JOIN products p ON p.id = g.product_id
+    LEFT JOIN production_plan_lines l ON l.id = g.line_id LEFT JOIN production_plans pl ON pl.id = l.plan_id
+    LEFT JOIN documents d ON d.id = l.order_id LEFT JOIN users u ON u.id = g.created_by
+    WHERE ${where} ORDER BY g.log_date DESC, g.id DESC LIMIT 2000`, params);
+  const products = await q("SELECT DISTINCT p.id, p.code, p.name FROM production_logs g JOIN products p ON p.id = g.product_id ORDER BY p.code");
+  return json({ rows: rows.map((r) => ({ ...r, qty: Number(r.qty) })), products });
 });
 
 route("GET", "/api/production/:id", async (c) => {
@@ -1326,7 +1362,8 @@ route("PUT", "/api/production/:id", async (c) => {
     const keep = lines.map((l: any) => l.id).filter(Boolean);
     const gone = await query(`SELECT l.id, p.code FROM production_plan_lines l JOIN products p ON p.id = l.product_id
       WHERE l.plan_id = $1 AND NOT (l.id = ANY($2)) AND EXISTS (SELECT 1 FROM production_logs g WHERE g.line_id = l.id)`, [id, keep]);
-    if (gone.length) fail(400, `${gone.map((g: any) => g.code).join(", ")} already has finished quantity logged. Undo those entries first, or keep the row.`);
+    if (gone.length && c.user!.role !== "Admin")
+      fail(400, `${gone.map((g: any) => g.code).join(", ")} already has finished quantity logged. Undo those entries first, keep the row, or ask the Admin.`);
     await query("DELETE FROM production_plan_lines WHERE plan_id = $1 AND NOT (id = ANY($2))", [id, keep]);
     let n = 0;
     for (const l of lines) {
@@ -1355,33 +1392,70 @@ route("POST", "/api/production/:id/status", async (c) => {
 route("DELETE", "/api/production/:id", async (c) => {
   require(c, "production", "edit");
   const id = Number(c.params.id);
-  if (await one("SELECT 1 FROM production_logs g JOIN production_plan_lines l ON l.id = g.line_id WHERE l.plan_id = $1 LIMIT 1", [id]))
-    fail(400, "This plan has finished quantity logged. Undo those entries first.");
-  await q("DELETE FROM production_plans WHERE id = $1", [id]);
-  return json({ ok: true });
+  const logs = await q("SELECT g.id, g.batch FROM production_logs g JOIN production_plan_lines l ON l.id = g.line_id WHERE l.plan_id = $1", [id]);
+  if (logs.length && c.user!.role !== "Admin") fail(400, "This plan has finished quantity logged. Undo those entries first, or ask the Admin.");
+  await tx(async (query) => {
+    for (const g of logs) {
+      if (g.batch) await query("DELETE FROM stock_moves WHERE batch = $1", [g.batch]);
+      await query("DELETE FROM production_logs WHERE id = $1", [g.id]);
+    }
+    await query("DELETE FROM production_plans WHERE id = $1", [id]);
+  });
+  return json({ ok: true, entries: logs.length });
 });
 
-// "+ Done": log finished quantity. Also books a Production stock entry that uses up the material per piece.
+/** Book one finished-production entry: the log line plus a Production stock entry that uses up the material per piece. */
+async function bookProduction(query: any, e: { line_id: number | null; product_id: number; qty: number; day: string; shift: string; operator: string; remarks: string; user: number }) {
+  let ref = "Daily production";
+  if (e.line_id) {
+    const pl = (await query(`SELECT pl.period, to_char(pl.start_date, 'DD/MM/YYYY') AS s FROM production_plan_lines l JOIN production_plans pl ON pl.id = l.plan_id WHERE l.id = $1`, [e.line_id]))[0];
+    if (pl) ref = `Plan ${pl.period} of ${pl.s}`;
+  }
+  const note = [e.shift && `Shift ${e.shift}`, e.operator, e.remarks].filter(Boolean).join(" · ") || "Production entry";
+  const batch = randomUUID().slice(0, 8);
+  await query("INSERT INTO stock_moves (move_date, product_id, qty, kind, batch, ref, notes, created_by) VALUES ($1,$2,$3,'Production',$4,$5,$6,$7)",
+    [e.day, e.product_id, e.qty, batch, ref, note, e.user]);
+  for (const b of await query("SELECT component_id, qty_per FROM product_bom WHERE product_id = $1", [e.product_id]))
+    await query("INSERT INTO stock_moves (move_date, product_id, qty, kind, batch, ref, notes, created_by) VALUES ($1,$2,$3,'Consumed',$4,$5,$6,$7)",
+      [e.day, b.component_id, -Math.round(Number(b.qty_per) * e.qty * 1000) / 1000, batch, ref, note, e.user]);
+  await query(`INSERT INTO production_logs (line_id, product_id, log_date, qty, shift, operator, remarks, batch, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [e.line_id, e.product_id, e.day, e.qty, e.shift || null, e.operator || null, e.remarks || null, batch, e.user]);
+}
+
+// "+ Done" on a plan row: a partial entry; several add up.
 route("POST", "/api/production/line/:id/done", async (c) => {
   require(c, "production", "edit");
-  const line = await one(`SELECT l.id, l.product_id, p.code, pl.status, pl.period, to_char(pl.start_date, 'YYYY-MM-DD') AS start_date
-    FROM production_plan_lines l JOIN production_plans pl ON pl.id = l.plan_id JOIN products p ON p.id = l.product_id WHERE l.id = $1`, [Number(c.params.id)]);
+  const line = await one(`SELECT l.id, l.product_id, pl.status FROM production_plan_lines l JOIN production_plans pl ON pl.id = l.plan_id WHERE l.id = $1`, [Number(c.params.id)]);
   if (!line) fail(404, "Plan row not found");
   if (line.status !== "Released") fail(400, "Release the plan first, then log what is finished.");
   const qty = num(c.body.qty);
   if (!qty || qty <= 0) fail(400, "Enter the quantity finished.");
-  const day = isoDate(c.body.date) || todayIso();
-  const ref = `Plan ${line.period === "month" ? "month" : "week"} of ${line.start_date.split("-").reverse().join("/")}`;
-  const batch = randomUUID().slice(0, 8);
-  await tx(async (query) => {
-    await query("INSERT INTO stock_moves (move_date, product_id, qty, kind, batch, ref, notes, created_by) VALUES ($1,$2,$3,'Production',$4,$5,$6,$7)",
-      [day, line.product_id, qty, batch, ref, "From production plan", c.user!.id]);
-    for (const b of await query("SELECT component_id, qty_per FROM product_bom WHERE product_id = $1", [line.product_id]))
-      await query("INSERT INTO stock_moves (move_date, product_id, qty, kind, batch, ref, notes, created_by) VALUES ($1,$2,$3,'Consumed',$4,$5,$6,$7)",
-        [day, b.component_id, -Math.round(Number(b.qty_per) * qty * 1000) / 1000, batch, ref, "From production plan", c.user!.id]);
-    await query("INSERT INTO production_logs (line_id, log_date, qty, batch, created_by) VALUES ($1,$2,$3,$4,$5)", [line.id, day, qty, batch, c.user!.id]);
-  });
+  await tx((query) => bookProduction(query, { line_id: line.id, product_id: line.product_id, qty, day: isoDate(c.body.date) || todayIso(),
+    shift: str(c.body.shift), operator: str(c.body.operator), remarks: str(c.body.remarks), user: c.user!.id }));
   return json({ ok: true });
+});
+
+/** Daily production entry: several products at once, each a separate traceable entry. */
+route("POST", "/api/production/daily", async (c) => {
+  require(c, "production", "edit");
+  const b = c.body;
+  const day = isoDate(b.date) || fail(400, "Date is required.");
+  const lines = (Array.isArray(b.lines) ? b.lines : []).slice(0, 100)
+    .map((l: any) => ({ product_id: num(l.product_id), qty: num(l.qty), line_id: num(l.line_id), remarks: str(l.remarks) }))
+    .filter((l: any) => l.product_id && l.qty);
+  if (!lines.length) fail(400, "Add at least one product with the quantity made.");
+  if (lines.some((l: any) => l.qty! <= 0)) fail(400, "Quantities must be above zero.");
+  await tx(async (query) => {
+    for (const l of lines) {
+      if (l.line_id) {
+        const ok = (await query(`SELECT 1 FROM production_plan_lines l JOIN production_plans pl ON pl.id = l.plan_id
+          WHERE l.id = $1 AND l.product_id = $2 AND pl.status = 'Released'`, [l.line_id, l.product_id]))[0];
+        if (!ok) fail(400, "A plan row picked does not match its product or is not released. Pick the row again.");
+      }
+      await bookProduction(query, { line_id: l.line_id, product_id: l.product_id!, qty: l.qty!, day, shift: str(b.shift), operator: str(b.operator), remarks: l.remarks, user: c.user!.id });
+    }
+  });
+  return json({ ok: true, saved: lines.length });
 });
 
 route("DELETE", "/api/production/log/:id", async (c) => {
@@ -1391,6 +1465,32 @@ route("DELETE", "/api/production/log/:id", async (c) => {
   await tx(async (query) => {
     if (log.batch) await query("DELETE FROM stock_moves WHERE batch = $1", [log.batch]);
     await query("DELETE FROM production_logs WHERE id = $1", [log.id]);
+  });
+  return json({ ok: true });
+});
+
+route("PUT", "/api/production/log/:id", async (c) => {
+  if (c.user?.role !== "Admin") fail(403, "Only Admin can edit a production entry. Others can undo it and enter it again.");
+  const log = await one("SELECT id, line_id, product_id, batch FROM production_logs WHERE id = $1", [Number(c.params.id)]);
+  if (!log) fail(404, "Entry not found");
+  const qty = num(c.body.qty);
+  if (!qty || qty <= 0) fail(400, "Enter the quantity made.");
+  const day = isoDate(c.body.date) || fail(400, "Date is required.");
+  // Same entry (keeps who made it and when); its stock entry is rebuilt for the new date and quantity.
+  const e = { shift: str(c.body.shift), operator: str(c.body.operator), remarks: str(c.body.remarks) };
+  await tx(async (query) => {
+    const old = (await query("SELECT ref, created_by FROM stock_moves WHERE batch = $1 AND kind = 'Production' LIMIT 1", [log.batch]))[0] || {};
+    if (log.batch) await query("DELETE FROM stock_moves WHERE batch = $1", [log.batch]);
+    const batch = log.batch || randomUUID().slice(0, 8);
+    const ref = old.ref || "Daily production", by = old.created_by || c.user!.id;
+    const note = [e.shift && `Shift ${e.shift}`, e.operator, e.remarks].filter(Boolean).join(" · ") || "Production entry";
+    await query("INSERT INTO stock_moves (move_date, product_id, qty, kind, batch, ref, notes, created_by) VALUES ($1,$2,$3,'Production',$4,$5,$6,$7)",
+      [day, log.product_id, qty, batch, ref, note, by]);
+    for (const b of await query("SELECT component_id, qty_per FROM product_bom WHERE product_id = $1", [log.product_id]))
+      await query("INSERT INTO stock_moves (move_date, product_id, qty, kind, batch, ref, notes, created_by) VALUES ($1,$2,$3,'Consumed',$4,$5,$6,$7)",
+        [day, b.component_id, -Math.round(Number(b.qty_per) * qty * 1000) / 1000, batch, ref, note, by]);
+    await query("UPDATE production_logs SET log_date = $1, qty = $2, shift = $3, operator = $4, remarks = $5, batch = $6 WHERE id = $7",
+      [day, qty, e.shift || null, e.operator || null, e.remarks || null, batch, log.id]);
   });
   return json({ ok: true });
 });

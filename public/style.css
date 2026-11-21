@@ -377,3 +377,9 @@ button.unlink:hover { text-decoration: underline; }
   .grid.plan td.actcell .btn { width: 100%; }
   .grid.plan tr.logrow td { border: 0; }
 }
+/* Daily production entry and log */
+.dailylines select.toward { min-width: 14rem; }
+.dailylines input[name=remarks] { min-width: 9rem; }
+.filters label { display: inline-flex; align-items: center; gap: .3rem; }
+.filters label input[type=date] { width: auto; }
+.grid.tracelog td { vertical-align: top; }
