@@ -8,6 +8,7 @@ import { ewayPage } from "./eway.js";
 import { attachSuggest } from "./suggest.js";
 import { saveWorkbook } from "./download.js";
 import { bankPages } from "./bank.js";
+import { planPages } from "./plan.js";
 import { DASHBOARDS, defaultDash, renderDash } from "./dash.js";
 
 // ------------------------------------------------------------------ helpers
@@ -72,8 +73,9 @@ function layout(body) {
     <a href="#/" class="${r === "#/" || r === "" ? "on" : ""}">🏠 Home</a>
     ${navGroup("Sales", "sales", can("sales_invoice") ? `<a href="#/invoices" class="${on("#/invoices")}">🧾 Sales Invoices</a>` : "")}
     ${navGroup("Purchase", "purchase", "")}
-    ${can("stock") || can("sales_invoice") || can("accounts") ? '<div class="sec">Stock & Accounts</div>' : ""}
+    ${can("stock") || can("production") || can("sales_invoice") || can("accounts") ? '<div class="sec">Stock & Accounts</div>' : ""}
     ${can("stock") ? `<a href="#/stock" class="${on("#/stock")}">📊 Stock</a>` : ""}
+    ${can("production") ? `<a href="#/production" class="${on("#/production")}">🗓️ Production Plan</a>` : ""}
     ${can("sales_invoice") ? `<a href="#/sales-register" class="${on("#/sales-register")}">📈 Sales Register</a>` : ""}
     ${can("accounts") ? `<a href="#/accounts" class="${on("#/accounts") || on("#/payments")}">💰 Accounts</a>
       <a href="#/bank" class="${on("#/bank")}">🏦 Bank</a>` : ""}
@@ -133,6 +135,7 @@ pages.login = () => {
 pages.dashboard = async () => {
   const quick = [
     can("sales_invoice", "edit") && ["#/invoices/new", "🧾 New Sales Invoice", "From a customer PO"],
+    can("production") && ["#/production", "🗓️ Production Plan", can("production", "edit") ? "Plan the week, log what's done" : "Planned vs done"],
     can("stock", "edit") && ["#/stock/entry", "📊 Stock Entry", "Opening, production, issue"],
     can("accounts", "edit") && ["#/payments/new?dir=in", "💰 Payment Received", "From a customer"],
     can("customer_po", "edit") && ["#/d/customer_po/upload", "⬆ Upload Customer PO", "PDF, Excel or photo → auto-fill"],
@@ -983,6 +986,7 @@ pages.notFound = () => layout(`<h1>Page not found</h1><p><a class="btn" href="#/
 
 const more = morePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 const bank = bankPages({ api, layout, can, flash, $, $$, errorBox, busy });
+const plan = planPages({ api, layout, can, flash, $, $$, errorBox, busy, forbidden: () => pages.forbidden() });
 const inv = invoicePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 
 // ------------------------------------------------------------------ router
@@ -1039,6 +1043,10 @@ async function routeInner() {
       if (p[1] === "moves") return await more.stockMoves();
       return await more.stockItem(p[1]);
     }
+    if (p[0] === "production") {
+      if (!can("production")) return pages.forbidden();
+      return p[2] === "edit" ? await plan.edit(p[1]) : await plan.board();
+    }
     if (p[0] === "eway" && p[2]) {
       if (!can(p[1] === "invoice" ? "sales_invoice" : p[1])) return pages.forbidden();
       return await ewayPage({ api, layout, S, can, flash, $, errorBox, busy }, p[1], p[2]);
@@ -1082,7 +1090,7 @@ document.addEventListener("click", (e) => {
   if (!th || !th.textContent.trim() || e.target.closest("a, button, input, select")) return;
   const head = th.parentElement, table = th.closest("table");
   const col = [...head.children].indexOf(th);
-  const rows = [...table.querySelectorAll("tr")].filter((r) => r !== head && r.querySelector("td") && !r.classList.contains("tot")
+  const rows = [...table.querySelectorAll("tr")].filter((r) => r !== head && r.closest("table") === table && r.querySelector("td") && !r.classList.contains("tot") && !r.classList.contains("logrow")
     && !(r.children.length === 1 && r.children[0].colSpan > 1));
   if (rows.length < 2) return;
   const dir = th.dataset.sort === "asc" ? "desc" : "asc";
@@ -1093,6 +1101,7 @@ document.addEventListener("click", (e) => {
   if (dir === "desc") keyed.reverse();
   const anchor = rows[rows.length - 1].nextSibling, parent = rows[0].parentElement;
   keyed.forEach(([, r]) => parent.insertBefore(r, anchor));
+  table.querySelectorAll("tr.logrow").forEach((lr) => table.querySelector(`tr[data-line="${lr.dataset.for}"]`)?.after(lr)); // detail rows stay under their row
 });
 document.addEventListener("click", (e) => {
   if (e.target.closest("a, button, input, select")) return;

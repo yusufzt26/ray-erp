@@ -13,13 +13,14 @@ A simple, web-based ERP for **Ray Precicomp** (nylon pipe forming, pipe assembli
 | **Customer PO / Vendor Invoice PDF upload** | Upload the PDF. The app reads the PO/invoice number, date, party (matched by GSTIN or name), GSTIN, item lines and total. The PDF is shown next to the form so you can correct anything before saving. A tick adds unknown parties or items to the masters with new codes. |
 | **Sales Invoice** | Open a Customer PO and press **Make Invoice**. Items come from the PO. GST is worked out automatically: CGST + SGST within Maharashtra, IGST for other states. The amount is written in words in Lakh/Crore. Prints in the Ray Precicomp format with the logo, as Original / Duplicate / Triplicate copies, plus box labels. Numbering continues the `R/26-005` series. |
 | **Stock** | Live stock of every item. It goes up with vendor invoices and down with sales invoices automatically. Store / Production make simple entries: opening stock, production done (can also use up raw material), issue to shop floor, and corrections. Each item has a history with running balance. |
+| **Production Plan** | The planner makes a **weekly or monthly plan**: product, planned qty, target date and (optionally) the sales order it is for, then presses *Release*. The floor presses **＋ Done** on a row to log what got finished; several entries add up. Each entry also books a Production stock entry (finished goods up, material per piece down) and can be undone. The board shows Planned, Done, Balance, a progress bar and Not started / In progress / Done / Late, with an overall "This week: X% done" bar and a card on the dashboard. |
 | **Sales Register** | Invoices for any date range, by month, by customer or one by one, with taxable value, CGST / SGST / IGST and total. Download to Excel or CSV. |
 | **Accounts** | Money to collect from customers and money to pay to vendors. Enter payments received and made; each customer and vendor has a statement with running balance. |
 
 ## How it is built
 
 - `public/` is the browser app: plain HTML, CSS and JavaScript, with no framework.
-  - `js/app.js` contains the screens, `js/invoice.js` the sales invoice and printing, `js/more.js` stock, sales register and accounts, `js/pdfread.js` the PDF reading (pdf.js) and `js/fields.js` the field lists shared with the server.
+  - `js/app.js` contains the screens, `js/invoice.js` the sales invoice and printing, `js/more.js` stock, sales register and accounts, `js/plan.js` the production plan, `js/pdfread.js` the PDF reading (pdf.js) and `js/fields.js` the field lists shared with the server.
 - `netlify/functions/api.mts` is the server API (Netlify Functions, `/api/*`).
 - `netlify/database/migrations/` holds the database tables (Netlify Database / Postgres). They are applied automatically on deploy.
 - Uploaded PDFs are stored in Netlify Blobs.

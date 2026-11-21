@@ -12,6 +12,7 @@ export const MODULES = {
   delivery_challan: "Delivery Challans",
   sales_invoice: "Sales Invoices & Sales Register",
   stock: "Stock",
+  production: "Production Plan",
   accounts: "Accounts (receivable / payable)",
   purchase_order: "Purchase Orders",
   grn: "Goods Receipts (GRN)",

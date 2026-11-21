@@ -31,6 +31,17 @@ export const DASHBOARDS = {
 };
 export const defaultDash = (role) => ({ Admin: "admin", Sales: "sales", Purchaser: "purchase", Store: "store", Production: "store", Accounts: "sales" })[role] || "sales";
 
+/** "Production this week: 68% done" card; links to the plan board. */
+function productionKpi(pr) {
+  if (pr === undefined) return "";
+  if (!pr) return kpi("Production this week", "—", "no plan made yet", "", "#/production");
+  const p = pr.planned > 0 ? Math.min(100, Math.round((pr.done / pr.planned) * 100)) : 0;
+  const word = pr.period === "month" ? "month" : "week";
+  return kpi(`Production this ${word}`, `${p}% done`,
+    `${qty(pr.done)} of ${qty(pr.planned)} planned${pr.late ? ` · ${pr.late} late` : ""}${pr.status === "Draft" ? " · draft" : ""}`,
+    pr.late ? "warn" : "", `#/production?period=${pr.period}`);
+}
+
 function stockParts(stock) {
   const fg = stock.filter((s) => s.category === "FG" || s.category === "SA");
   const rm = stock.filter((s) => s.category === "RM");
@@ -51,6 +62,7 @@ export function renderDash(view, d) {
         ${kpi("To pay", rs(d.toPay), "to vendors", "", "#/accounts?tab=pay")}
         ${kpi("Purchases this year", rs(d.purchFY), "before GST", "", "#/d/vendor_invoice")}
         ${kpi("Stock alerts", short_.length, "items at zero or below", short_.length ? "warn" : "", "#/stock")}
+        ${productionKpi(d.production)}
       </div>
       <div class="dgrid">
         ${panel("Sales vs purchases, last 12 months", columns(L, [{ name: "Sales", values: d.salesByMonth, color: COLORS[0] }, { name: "Purchases", values: d.purchByMonth, color: COLORS[1] }]), "wide")}
@@ -106,6 +118,7 @@ export function renderDash(view, d) {
       ${kpi("Items in stock", d.stock.filter((s) => s.balance > 0).length, `of ${d.stock.length} items`, "", "#/stock?only=instock")}
       ${kpi("Need attention", short_.length, "items at zero or minus", short_.length ? "warn" : "", "#/stock")}
       ${kpi("Dispatched this month", qty(d.dispatchByMonth[11]), "pieces on sales invoices")}
+      ${productionKpi(d.production)}
       ${kpi("Made this month", qty(d.productionByMonth[11]), "from production entries", "", "#/stock/moves")}
       ${kpi("Vendor bills received", d.receiptsThisMonth, "this month", "", "#/d/vendor_invoice")}
     </div>

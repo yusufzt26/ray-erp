@@ -337,3 +337,43 @@ table.grid th[data-sort="desc"]::after { content: " ▼"; font-size: .7em; }
 .link-wrap { display: inline-flex; flex-direction: column; align-items: flex-start; gap: .25rem; }
 button.unlink { background: none; border: 0; color: #b42318; font-size: .8rem; cursor: pointer; padding: 0 .2rem; }
 button.unlink:hover { text-decoration: underline; }
+
+/* Production plan */
+.planbar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; margin-bottom: .8rem; }
+.planbar .ptabs { margin: 0; border: 0; }
+.pnav { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.pnav b { min-width: 13rem; text-align: center; }
+.pnav input[type=date] { width: auto; padding: .3rem .4rem; border: 1px solid var(--line); border-radius: 8px; }
+.card.empty { text-align: center; padding: 2rem 1rem; }
+.overall .ohead { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: .5rem; font-size: 1.1rem; }
+.overall .pbar { height: 14px; width: 100%; }
+.overall p { margin: .5rem 0 0; }
+.pbar { display: inline-block; vertical-align: middle; width: 80px; height: 9px; border-radius: 99px; background: #e3e8ee; overflow: hidden; }
+.pbar i { display: block; height: 100%; background: #9aa8b6; border-radius: 99px; }
+.pbar.done i { background: #2e9e6b; } .pbar.prog i { background: #e08a1e; } .pbar.late i { background: #c94a4a; }
+.pcell { white-space: nowrap; } .pcell small { margin-left: .4rem; color: var(--muted); }
+.st { font-size: .82rem; font-weight: 600; padding: 2px 9px; border-radius: 999px; white-space: nowrap; background: #e8eef5; color: var(--muted); }
+.st.done { background: var(--ok); color: var(--ok-ink); } .st.prog { background: #fdf0d5; color: #8a5a00; } .st.late { background: var(--err); color: var(--err-ink); }
+.grid.plan .logrow td { background: var(--panel); }
+.donef { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .2rem 0 .6rem; }
+.donef input.qty { width: 7rem !important; padding: .35rem .5rem; border: 1px solid var(--line); border-radius: 8px; }
+.donef label { display: flex; align-items: center; gap: .3rem; margin: 0; font-weight: 400; }
+.donef input[type=date] { width: auto; padding: .3rem; border: 1px solid var(--line); border-radius: 8px; }
+.grid.logs { max-width: 420px; }
+.planlines select[name=order_id] { max-width: 15rem; }
+.planlines input[name=notes] { min-width: 9rem; }
+@media (max-width: 760px) { .pnav b { min-width: 0; flex-basis: 100%; text-align: left; order: -1; } }
+.grid td.nowrap { white-space: nowrap; }
+/* Phone: each plan row becomes a card so Done, Status and ＋ Done fit without scrolling sideways */
+@media (max-width: 760px) {
+  .grid.plan, .grid.plan tbody, .grid.plan tr, .grid.plan td { display: block; }
+  .grid.plan tr:has(th), .grid.plan td.ln, .grid.plan tr[hidden] { display: none; }
+  .grid.plan tr[data-line] { display: grid; grid-template-columns: repeat(3, 1fr); gap: .35rem .6rem; padding: .7rem .6rem; border-top: 1px solid var(--line); }
+  .grid.plan tr[data-line] td { border: 0; padding: 0; text-align: left !important; }
+  .grid.plan tr[data-line] td:nth-child(2), .grid.plan td.pcell, .grid.plan td.actcell { grid-column: 1 / -1; }
+  .grid.plan td[data-label]::before { content: attr(data-label); display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .grid.plan td.pcell::before { display: inline; margin-right: .5rem; }
+  .grid.plan td.pcell .pbar { width: 55%; }
+  .grid.plan td.actcell .btn { width: 100%; }
+  .grid.plan tr.logrow td { border: 0; }
+}

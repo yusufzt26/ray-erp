@@ -1201,6 +1201,7 @@ route("POST", "/api/stock/move", async (c) => {
 
 route("DELETE", "/api/stock/batch/:batch", async (c) => {
   require(c, "stock", "edit");
+  await q("DELETE FROM production_logs WHERE batch = $1", [c.params.batch]); // a production plan "done" entry goes with its stock entry
   await q("DELETE FROM stock_moves WHERE batch = $1", [c.params.batch]);
   return json({ ok: true });
 });
@@ -1244,6 +1245,166 @@ route("PUT", "/api/bom/:id", async (c) => {
   });
   return json({ ok: true });
 });
+
+// ---------------------------------------------------------------- production plan (weekly / monthly)
+/** Monday-to-Sunday week, or 1st-to-last of the month, holding the given day. */
+function planRange(period: string, day: string) {
+  const d = new Date(day + "T00:00:00Z");
+  if (period === "month") {
+    const s = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+    const e = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+    return { start: s.toISOString().slice(0, 10), end: e.toISOString().slice(0, 10) };
+  }
+  const s = new Date(d.getTime() - ((d.getUTCDay() + 6) % 7) * 86400e3);
+  return { start: s.toISOString().slice(0, 10), end: new Date(s.getTime() + 6 * 86400e3).toISOString().slice(0, 10) };
+}
+const planPeriod = (v: unknown) => (str(v) === "month" ? "month" : "week");
+const PLAN_LINES_SQL = `SELECT l.id, l.plan_id, l.line_no, l.product_id, p.code, p.name, p.uom, l.planned_qty,
+    to_char(l.target_date, 'YYYY-MM-DD') AS target_date, l.order_id, d.doc_no AS order_no, d.party_name AS order_party, l.notes,
+    COALESCE((SELECT SUM(g.qty) FROM production_logs g WHERE g.line_id = l.id), 0) AS done
+  FROM production_plan_lines l JOIN products p ON p.id = l.product_id LEFT JOIN documents d ON d.id = l.order_id`;
+const PLAN_TOTALS_SQL = `SELECT pl.id, pl.period, to_char(pl.start_date, 'YYYY-MM-DD') AS start_date, to_char(pl.end_date, 'YYYY-MM-DD') AS end_date, pl.status,
+    COUNT(l.id) AS lines, COALESCE(SUM(l.planned_qty), 0) AS planned,
+    COALESCE(SUM(LEAST(l.planned_qty, COALESCE(g.done, 0))), 0) AS done,
+    COUNT(l.id) FILTER (WHERE l.target_date < $1 AND COALESCE(g.done, 0) < l.planned_qty) AS late
+  FROM production_plans pl LEFT JOIN production_plan_lines l ON l.plan_id = pl.id
+  LEFT JOIN (SELECT line_id, SUM(qty) AS done FROM production_logs GROUP BY line_id) g ON g.line_id = l.id`;
+
+route("GET", "/api/production", async (c) => {
+  require(c, "production");
+  const sp = new URL(c.req.url).searchParams;
+  const period = planPeriod(sp.get("period"));
+  const { start, end } = planRange(period, isoDate(sp.get("date")) || todayIso());
+  const plan = await one(`SELECT pl.id, pl.period, pl.status, pl.notes, to_char(pl.start_date, 'YYYY-MM-DD') AS start_date, u.full_name AS by_user
+    FROM production_plans pl LEFT JOIN users u ON u.id = pl.created_by WHERE pl.period = $1 AND pl.start_date = $2`, [period, start]);
+  const lines = plan ? await q(PLAN_LINES_SQL + " WHERE l.plan_id = $1 ORDER BY l.line_no, l.id", [plan.id]) : [];
+  const logs = lines.length ? await q(`SELECT g.id, g.line_id, to_char(g.log_date, 'YYYY-MM-DD') AS log_date, g.qty, u.full_name AS by_user
+    FROM production_logs g LEFT JOIN users u ON u.id = g.created_by WHERE g.line_id = ANY($1) ORDER BY g.log_date, g.id`, [lines.map((l) => l.id)]) : [];
+  for (const l of lines) { l.done = Number(l.done); l.planned_qty = Number(l.planned_qty); l.logs = logs.filter((g) => g.line_id === l.id); }
+  const others = await q(PLAN_TOTALS_SQL + " GROUP BY pl.id ORDER BY pl.start_date DESC, pl.period LIMIT 12", [todayIso()]);
+  return json({ period, start, end, today: todayIso(), plan, lines, others });
+});
+
+route("GET", "/api/production/options", async (c) => {
+  require(c, "production", "edit");
+  const products = await q("SELECT id, code, name, uom, category FROM products WHERE active = 1 AND category <> 'SV' ORDER BY (category IN ('FG','SA')) DESC, code");
+  const orders = await q(`SELECT id, doc_no, party_name, to_char(doc_date, 'YYYY-MM-DD') AS doc_date FROM documents
+    WHERE doc_type = 'customer_po' AND COALESCE(status, '') <> 'Cancelled' ORDER BY doc_date DESC NULLS LAST, id DESC LIMIT 300`);
+  return json({ products, orders });
+});
+
+route("POST", "/api/production", async (c) => {
+  require(c, "production", "edit");
+  const period = planPeriod(c.body.period);
+  const { start, end } = planRange(period, isoDate(c.body.date) || todayIso());
+  const have = await one("SELECT id FROM production_plans WHERE period = $1 AND start_date = $2", [period, start]);
+  if (have) return json({ id: have.id });
+  const row = await one("INSERT INTO production_plans (period, start_date, end_date, created_by) VALUES ($1,$2,$3,$4) RETURNING id", [period, start, end, c.user!.id]);
+  return json({ id: row.id });
+});
+
+route("GET", "/api/production/:id", async (c) => {
+  require(c, "production");
+  const plan = await one(`SELECT id, period, status, notes, to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date
+    FROM production_plans WHERE id = $1`, [Number(c.params.id)]);
+  if (!plan) fail(404, "Plan not found");
+  const lines = await q(PLAN_LINES_SQL + " WHERE l.plan_id = $1 ORDER BY l.line_no, l.id", [plan.id]);
+  return json({ plan, lines });
+});
+
+route("PUT", "/api/production/:id", async (c) => {
+  require(c, "production", "edit");
+  const id = Number(c.params.id);
+  const plan = await one("SELECT id, to_char(end_date, 'YYYY-MM-DD') AS end_date FROM production_plans WHERE id = $1", [id]);
+  if (!plan) fail(404, "Plan not found");
+  const lines = (Array.isArray(c.body.lines) ? c.body.lines : []).slice(0, 300)
+    .map((l: any) => ({ id: num(l.id), product_id: num(l.product_id), planned_qty: num(l.planned_qty), target_date: isoDate(l.target_date) || plan.end_date,
+      order_id: num(l.order_id), notes: str(l.notes) || null }))
+    .filter((l: any) => l.product_id);
+  for (const l of lines) if (!l.planned_qty || l.planned_qty <= 0) fail(400, "Every row needs a planned quantity above zero.");
+  await tx(async (query) => {
+    const keep = lines.map((l: any) => l.id).filter(Boolean);
+    const gone = await query(`SELECT l.id, p.code FROM production_plan_lines l JOIN products p ON p.id = l.product_id
+      WHERE l.plan_id = $1 AND NOT (l.id = ANY($2)) AND EXISTS (SELECT 1 FROM production_logs g WHERE g.line_id = l.id)`, [id, keep]);
+    if (gone.length) fail(400, `${gone.map((g: any) => g.code).join(", ")} already has finished quantity logged. Undo those entries first, or keep the row.`);
+    await query("DELETE FROM production_plan_lines WHERE plan_id = $1 AND NOT (id = ANY($2))", [id, keep]);
+    let n = 0;
+    for (const l of lines) {
+      n++;
+      const vals = [l.product_id, l.planned_qty, l.target_date, l.order_id, l.notes, n];
+      const upd = l.id ? await query(`UPDATE production_plan_lines SET product_id = $1, planned_qty = $2, target_date = $3, order_id = $4, notes = $5, line_no = $6
+        WHERE id = $7 AND plan_id = $8 RETURNING id`, [...vals, l.id, id]) : [];
+      if (!upd.length) await query(`INSERT INTO production_plan_lines (product_id, planned_qty, target_date, order_id, notes, line_no, plan_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)`, [...vals, id]);
+    }
+    await query("UPDATE production_plans SET notes = $1 WHERE id = $2", [str(c.body.notes) || null, id]);
+  });
+  return json({ ok: true });
+});
+
+route("POST", "/api/production/:id/status", async (c) => {
+  require(c, "production", "edit");
+  const status = str(c.body.status) === "Released" ? "Released" : "Draft";
+  const id = Number(c.params.id);
+  if (status === "Released" && !(await one("SELECT 1 FROM production_plan_lines WHERE plan_id = $1 LIMIT 1", [id])))
+    fail(400, "Add at least one product to the plan before releasing it.");
+  await q("UPDATE production_plans SET status = $1 WHERE id = $2", [status, id]);
+  return json({ ok: true });
+});
+
+route("DELETE", "/api/production/:id", async (c) => {
+  require(c, "production", "edit");
+  const id = Number(c.params.id);
+  if (await one("SELECT 1 FROM production_logs g JOIN production_plan_lines l ON l.id = g.line_id WHERE l.plan_id = $1 LIMIT 1", [id]))
+    fail(400, "This plan has finished quantity logged. Undo those entries first.");
+  await q("DELETE FROM production_plans WHERE id = $1", [id]);
+  return json({ ok: true });
+});
+
+// "+ Done": log finished quantity. Also books a Production stock entry that uses up the material per piece.
+route("POST", "/api/production/line/:id/done", async (c) => {
+  require(c, "production", "edit");
+  const line = await one(`SELECT l.id, l.product_id, p.code, pl.status, pl.period, to_char(pl.start_date, 'YYYY-MM-DD') AS start_date
+    FROM production_plan_lines l JOIN production_plans pl ON pl.id = l.plan_id JOIN products p ON p.id = l.product_id WHERE l.id = $1`, [Number(c.params.id)]);
+  if (!line) fail(404, "Plan row not found");
+  if (line.status !== "Released") fail(400, "Release the plan first, then log what is finished.");
+  const qty = num(c.body.qty);
+  if (!qty || qty <= 0) fail(400, "Enter the quantity finished.");
+  const day = isoDate(c.body.date) || todayIso();
+  const ref = `Plan ${line.period === "month" ? "month" : "week"} of ${line.start_date.split("-").reverse().join("/")}`;
+  const batch = randomUUID().slice(0, 8);
+  await tx(async (query) => {
+    await query("INSERT INTO stock_moves (move_date, product_id, qty, kind, batch, ref, notes, created_by) VALUES ($1,$2,$3,'Production',$4,$5,$6,$7)",
+      [day, line.product_id, qty, batch, ref, "From production plan", c.user!.id]);
+    for (const b of await query("SELECT component_id, qty_per FROM product_bom WHERE product_id = $1", [line.product_id]))
+      await query("INSERT INTO stock_moves (move_date, product_id, qty, kind, batch, ref, notes, created_by) VALUES ($1,$2,$3,'Consumed',$4,$5,$6,$7)",
+        [day, b.component_id, -Math.round(Number(b.qty_per) * qty * 1000) / 1000, batch, ref, "From production plan", c.user!.id]);
+    await query("INSERT INTO production_logs (line_id, log_date, qty, batch, created_by) VALUES ($1,$2,$3,$4,$5)", [line.id, day, qty, batch, c.user!.id]);
+  });
+  return json({ ok: true });
+});
+
+route("DELETE", "/api/production/log/:id", async (c) => {
+  require(c, "production", "edit");
+  const log = await one("SELECT id, batch FROM production_logs WHERE id = $1", [Number(c.params.id)]);
+  if (!log) fail(404, "Entry not found");
+  await tx(async (query) => {
+    if (log.batch) await query("DELETE FROM stock_moves WHERE batch = $1", [log.batch]);
+    await query("DELETE FROM production_logs WHERE id = $1", [log.id]);
+  });
+  return json({ ok: true });
+});
+
+/** This week's plan if there is one, else this month's: for the dashboards. */
+async function productionNow() {
+  const today = todayIso();
+  for (const period of ["week", "month"]) {
+    const { start } = planRange(period, today);
+    const r = await one(PLAN_TOTALS_SQL + " WHERE pl.period = $2 AND pl.start_date = $3 GROUP BY pl.id", [today, period, start]);
+    if (r && Number(r.lines)) return { period, status: r.status, planned: Number(r.planned), done: Number(r.done), late: Number(r.late), lines: Number(r.lines) };
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------- department dashboards
 const DASH_VIEWS: Record<string, string> = { admin: "", sales: "sales_invoice", purchase: "vendor_invoice", store: "stock" };
@@ -1345,6 +1506,7 @@ route("GET", "/api/dash/:view", async (c) => {
         string_agg(p.code || ' ' || (CASE WHEN m.qty > 0 THEN '+' ELSE '' END) || m.qty, ', ' ORDER BY m.id) AS items
       FROM stock_moves m JOIN products p ON p.id = m.product_id GROUP BY m.batch ORDER BY MAX(m.id) DESC LIMIT 6`);
   }
+  if ((view === "store" || view === "admin") && c.perms.production !== "none") out.production = await productionNow();
   if (view === "admin") {
     out.users = Number((await one("SELECT COUNT(*) AS n FROM users WHERE active = 1")).n);
     out.counts = {

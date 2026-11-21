@@ -157,6 +157,42 @@ await p.goto(U + "/#/stock/1"); await p.waitForSelector("text=in stock now");
 ok((await p.textContent("main")).includes("Dispatched") && (await p.textContent("main")).includes("Production"), "item stock history");
 await p.screenshot({ path: join(SHOTS, "stock_item.png"), fullPage: true });
 
+// production plan: make this week's plan, release it, log finished qty (adds to stock via material per piece), undo
+await p.goto(U + "/#/production"); await p.waitForSelector("text=No plan for this week yet");
+await p.click("#make"); await p.waitForSelector("text=Save plan");
+await p.selectOption("#rows tr:first-child [name=product_id]", "1"); await p.fill("#rows tr:first-child [name=planned_qty]", "200");
+await p.click("#add"); await p.selectOption("#rows tr:nth-child(2) [name=product_id]", "3"); await p.fill("#rows tr:nth-child(2) [name=planned_qty]", "50");
+await p.fill("#rows tr:nth-child(2) [name=target_date]", "2020-01-06");
+await p.fill("#rows tr:first-child [name=notes]", "For Monday dispatch"); await p.fill("[name=plan_notes]", "Fuel line first, connectors after.");
+await p.screenshot({ path: join(SHOTS, "plan_edit.png"), fullPage: true });
+await p.click("button:has-text('Save plan')"); await p.waitForSelector("text=Release plan");
+ok(await p.isVisible(".pill:has-text('Draft')") && !(await p.isVisible("button.plus")), "plan saved as draft, no Done buttons yet");
+await p.click("#release"); await p.waitForSelector("text=Plan released");
+const fgP = Number((await stockOf(1)).balance), rmP = Number((await stockOf(2)).balance);
+await p.click("tr[data-line] >> nth=0 >> button.plus");
+await p.fill("tr.logrow:not([hidden]) [name=qty]", "60"); await p.click("tr.logrow:not([hidden]) button:has-text('Save')");
+await p.waitForSelector("text=Finished quantity saved");
+await p.click("tr[data-line] >> nth=0 >> button.plus");
+await p.fill("tr.logrow:not([hidden]) [name=qty]", "40"); await p.click("tr.logrow:not([hidden]) button:has-text('Save')");
+await p.waitForSelector("tr[data-line] >> nth=0 >> text=50%");
+ok(Number((await stockOf(1)).balance) === fgP + 100, "logging done adds finished goods to stock");
+ok(Math.abs(Number((await stockOf(2)).balance) - (rmP - 45)) < 1e-6, "logging done uses up raw material per piece");
+const row1 = await p.textContent("tr[data-line] >> nth=0");
+ok(row1.includes("In progress") && row1.includes("50%"), "row shows 100 of 200 in progress");
+ok((await p.textContent("tr[data-line] >> nth=1")).includes("Late"), "row past its target date shows Late");
+ok((await p.textContent(".overall")).includes("40% done"), "overall progress 100 of 250 = 40%");
+await p.screenshot({ path: join(SHOTS, "plan_board.png"), fullPage: true });
+await p.click("tr[data-line] >> nth=0 >> a.donecount");
+await p.screenshot({ path: join(SHOTS, "plan_logs.png"), fullPage: true });
+await p.click("tr.logrow:not([hidden]) button.undo >> nth=0"); await p.click("tr.logrow:not([hidden]) button.undo >> nth=0");
+await p.waitForSelector("text=Entry undone"); await p.waitForSelector("tr[data-line] >> nth=0 >> text=20%");
+ok(Number((await stockOf(1)).balance) === fgP + 40, "undo removes its stock entry");
+await p.goto(U + "/#/?view=admin"); await p.waitForSelector("text=Production this week");
+ok((await p.textContent(".kpis")).includes("16% done"), "dashboard card shows production this week");
+await p.screenshot({ path: join(SHOTS, "plan_dash.png") });
+await p.goto(U + "/#/production?period=month"); await p.waitForSelector("text=No plan for this month yet");
+ok(true, "month view");
+
 // sales register
 await p.goto(U + "/#/sales-register"); await p.waitForSelector("text=Total sales");
 ok((await p.textContent("main")).includes("1,13,150.00"), "sales register taxable value");
