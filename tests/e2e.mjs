@@ -169,6 +169,18 @@ await p.screenshot({ path: join(SHOTS, "plan_edit.png"), fullPage: true });
 await p.click("button:has-text('Save plan')"); await p.waitForSelector("text=Release plan");
 ok(await p.isVisible(".pill:has-text('Draft')") && !(await p.isVisible("button.plus")), "plan saved as draft, no Log buttons yet");
 await p.click("#release"); await p.waitForSelector("text=Plan released");
+// production master: cycle time per piece; the plan works out hours and RM / BOP needed vs stock
+await p.goto(U + "/#/production/master"); await p.waitForSelector("table.master");
+await p.fill("table.master tr[data-id='1'] input.ct", "36"); await p.press("table.master tr[data-id='1'] input.ct", "Tab");
+await p.waitForSelector("table.master tr[data-id='1'] >> text=100");
+ok(true, "cycle time 36 sec gives 100 pcs / hour");
+await p.goto(U + "/#/production/master/1"); await p.waitForSelector("text=Material used per piece");
+ok((await p.inputValue("#bomlines tr:first-child [name=qty_per]")) === "0.45", "material per piece shown in the production master");
+await p.goto(U + "/#/production"); await p.waitForSelector("text=What this week's plan needs");
+const needs = await p.textContent(".needs");
+ok(needs.includes("2 h") && needs.includes("No cycle time for BO-00001"), "working hours for the plan: 200 pcs x 36 sec = 2 h; missing cycle time flagged");
+ok(/PA12[\s\S]*90/.test(needs), "RM needed for the plan: 200 x 0.45 = 90 MTR");
+await p.screenshot({ path: join(SHOTS, "plan_needs.png"), fullPage: true });
 const fgP = Number((await stockOf(1)).balance), rmP = Number((await stockOf(2)).balance);
 const logEntry = async (qty, extra = {}) => {
   await p.click("tr[data-line] >> nth=0 >> button.plus");

@@ -1215,8 +1215,14 @@ route("GET", "/api/bom", async (c) => {
   return json({ rows: await q(BOM_SQL + " ORDER BY b.product_id, b.id") });
 });
 
+/** Material per piece belongs to Products, and is also kept up by Production from its master list. */
+const requireBom = (c: Ctx, level: "view" | "edit") => {
+  if (LEVELS.indexOf(c.perms.production || "none") >= LEVELS.indexOf(level)) return;
+  require(c, "products", level);
+};
+
 route("GET", "/api/bom/:id", async (c) => {
-  require(c, "products");
+  requireBom(c, "view");
   const id = Number(c.params.id);
   return json({
     lines: await q(BOM_SQL + " WHERE b.product_id = $1 ORDER BY b.id", [id]),
@@ -1225,7 +1231,7 @@ route("GET", "/api/bom/:id", async (c) => {
 });
 
 route("PUT", "/api/bom/:id", async (c) => {
-  require(c, "products", "edit");
+  requireBom(c, "edit");
   const id = Number(c.params.id);
   if (!(await one("SELECT id FROM products WHERE id = $1", [id]))) fail(404, "Product not found");
   const seen = new Set<number>();
@@ -1259,7 +1265,7 @@ function planRange(period: string, day: string) {
   return { start: s.toISOString().slice(0, 10), end: new Date(s.getTime() + 6 * 86400e3).toISOString().slice(0, 10) };
 }
 const planPeriod = (v: unknown) => (str(v) === "month" ? "month" : "week");
-const PLAN_LINES_SQL = `SELECT l.id, l.plan_id, l.line_no, l.product_id, p.code, p.name, p.uom, l.planned_qty,
+const PLAN_LINES_SQL = `SELECT l.id, l.plan_id, l.line_no, l.product_id, p.code, p.name, p.uom, p.cycle_time, l.planned_qty,
     to_char(l.target_date, 'YYYY-MM-DD') AS target_date, l.order_id, d.doc_no AS order_no, d.party_name AS order_party, l.notes,
     COALESCE((SELECT SUM(g.qty) FROM production_logs g WHERE g.line_id = l.id), 0) AS done
   FROM production_plan_lines l JOIN products p ON p.id = l.product_id LEFT JOIN documents d ON d.id = l.order_id`;
@@ -1282,7 +1288,55 @@ route("GET", "/api/production", async (c) => {
     FROM production_logs g LEFT JOIN users u ON u.id = g.created_by WHERE g.line_id = ANY($1) ORDER BY g.log_date, g.id`, [lines.map((l) => l.id)]) : [];
   for (const l of lines) { l.done = Number(l.done); l.planned_qty = Number(l.planned_qty); l.logs = logs.filter((g) => g.line_id === l.id); }
   const others = await q(PLAN_TOTALS_SQL + " GROUP BY pl.id ORDER BY pl.start_date DESC, pl.period LIMIT 12", [todayIso()]);
-  return json({ period, start, end, today: todayIso(), plan, lines, others });
+  return json({ period, start, end, today: todayIso(), plan, lines, others, needs: lines.length ? await planNeeds(lines) : null });
+});
+
+/** Working hours (qty x cycle time) and material (qty x material per piece) a plan needs, against stock now. */
+async function planNeeds(lines: any[]) {
+  let hoursPlan = 0, hoursLeft = 0;
+  const noCycle: string[] = [], noBom: string[] = [];
+  const mat = new Map<number, { plan: number; left: number }>();
+  const bom = await q("SELECT product_id, component_id, qty_per FROM product_bom WHERE product_id = ANY($1)", [lines.map((l) => l.product_id)]);
+  for (const l of lines) {
+    const left = Math.max(0, l.planned_qty - l.done), ct = Number(l.cycle_time) || 0;
+    if (ct > 0) { hoursPlan += (l.planned_qty * ct) / 3600; hoursLeft += (left * ct) / 3600; } else noCycle.push(l.code);
+    const parts = bom.filter((b) => b.product_id === l.product_id);
+    if (!parts.length) noBom.push(l.code);
+    for (const b of parts) {
+      const m = mat.get(b.component_id) || { plan: 0, left: 0 };
+      m.plan += l.planned_qty * Number(b.qty_per); m.left += left * Number(b.qty_per);
+      mat.set(b.component_id, m);
+    }
+  }
+  const ids = [...mat.keys()];
+  const stock = ids.length ? await q(`SELECT p.id, p.code, p.name, p.uom, p.category, COALESCE(f.balance, 0) AS balance
+    FROM products p LEFT JOIN (${STOCK_SUM}) f ON f.product_id = p.id WHERE p.id = ANY($1) ORDER BY p.category, p.code`, [ids]) : [];
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  const materials = stock.map((p) => {
+    const m = mat.get(p.id)!, inStock = Number(p.balance);
+    return { id: p.id, code: p.code, name: p.name, uom: p.uom, category: p.category, need_plan: r3(m.plan), need_left: r3(m.left), stock: r3(inStock), short: r3(Math.max(0, m.left - inStock)) };
+  });
+  return { hoursPlan: Math.round(hoursPlan * 10) / 10, hoursLeft: Math.round(hoursLeft * 10) / 10, noCycle, noBom, materials };
+}
+
+// ---- production master: cycle time and material per piece of each item made in-house
+route("GET", "/api/production/master", async (c) => {
+  require(c, "production");
+  const rows = await q(`SELECT p.id, p.code, p.name, p.category, p.uom, p.cycle_time,
+      (SELECT string_agg(cp.code || ' × ' || b.qty_per || ' ' || COALESCE(cp.uom, ''), ', ' ORDER BY b.id) FROM product_bom b JOIN products cp ON cp.id = b.component_id WHERE b.product_id = p.id) AS bom
+    FROM products p WHERE p.active = 1 AND p.category <> 'SV'
+      AND (p.category IN ('FG', 'SA', 'CP') OR p.cycle_time IS NOT NULL OR EXISTS (SELECT 1 FROM product_bom b WHERE b.product_id = p.id))
+    ORDER BY (p.category = 'FG') DESC, p.category, p.code`);
+  return json({ rows });
+});
+
+route("PUT", "/api/production/master/:id", async (c) => {
+  require(c, "production", "edit");
+  const ct = num(c.body.cycle_time);
+  if (ct !== null && ct < 0) fail(400, "Cycle time cannot be negative.");
+  const r = await one("UPDATE products SET cycle_time = $1 WHERE id = $2 RETURNING id", [ct || null, Number(c.params.id)]);
+  if (!r) fail(404, "Product not found");
+  return json({ ok: true });
 });
 
 route("GET", "/api/production/options", async (c) => {

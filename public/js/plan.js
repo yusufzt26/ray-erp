@@ -96,6 +96,7 @@ export function planPages(ctx) {
         <td class="num" data-label="Planned">${qtyFmt(l.planned_qty)} <span class="muted small">${h(l.uom || "")}</span></td>
         <td class="num" data-label="Done"><a href="#entries" class="donecount" title="Show its entries">${qtyFmt(l.done)}</a></td>
         <td class="num" data-label="Balance">${qtyFmt(Math.max(0, l.planned_qty - l.done))}</td>
+        <td class="num" data-label="Hours left">${Number(l.cycle_time) > 0 ? qtyFmt(Math.round(Math.max(0, l.planned_qty - l.done) * l.cycle_time / 360) / 10) + " h" : '<span class="muted" title="No cycle time in Production master">—</span>'}</td>
         <td class="pcell" data-label="Progress">${bar(pct(l.done, l.planned_qty), tone)}<small>${pct(l.done, l.planned_qty)}%</small></td>
         <td data-label="Status"><span class="st ${tone}">${st}</span></td>
         <td class="actcell">${editable && released ? '<button type="button" class="btn small primary plus" title="Log production for this row">＋ Log</button>' : ""}</td>
@@ -115,9 +116,10 @@ export function planPages(ctx) {
         ${plan.notes ? `<p class="small">📝 ${h(plan.notes)}</p>` : ""}
       </div>
       <div class="scroll"><table class="grid plan">
-        <tr><th>#</th><th>Product</th><th>Target</th><th>Sales order</th><th class="num">Planned</th><th class="num">Done</th><th class="num">Balance</th><th>Progress</th><th>Status</th><th></th></tr>
-        ${rows || `<tr><td colspan="10" class="muted">No rows yet. ${editable ? `<a href="#/production/${plan.id}/edit">Add products</a>` : ""}</td></tr>`}
-      </table></div>`;
+        <tr><th>#</th><th>Product</th><th>Target</th><th>Sales order</th><th class="num">Planned</th><th class="num">Done</th><th class="num">Balance</th><th class="num">Hours left</th><th>Progress</th><th>Status</th><th></th></tr>
+        ${rows || `<tr><td colspan="11" class="muted">No rows yet. ${editable ? `<a href="#/production/${plan.id}/edit">Add products</a>` : ""}</td></tr>`}
+      </table></div>
+      ${needsBlock(d.needs, word)}`;
 
     const entryProducts = [...new Map(entries.map((r) => [String(r.product_id), r])).values()];
     const allPlans = d.others.length ? `<details class="allplans" ${plan ? "" : "open"}><summary>All plans (${d.others.length})</summary><div class="scroll"><table class="grid mini">
@@ -133,6 +135,7 @@ export function planPages(ctx) {
     layout(`
       <div class="head"><h1>Production</h1>
         <div class="actions">
+          <a class="btn" href="#/production/master">⚙️ Production master</a>
           ${plan && editable ? `<a class="btn" href="#/production/${plan.id}/edit">✏️ Edit plan</a>
             ${released ? '<button class="btn" id="draft">↩ Back to draft</button>' : '<button class="btn primary" id="release">✅ Release plan</button>'}` : ""}
         </div></div>
@@ -351,5 +354,86 @@ export function planPages(ctx) {
     }));
   }
 
-  return { board, edit };
+  // ============================================================== PRODUCTION MASTER
+  // Per item made in-house: cycle time (seconds per piece) and material per piece (RM / BOP).
+  const perHour = (ct) => (Number(ct) > 0 ? qtyFmt(Math.round((3600 / Number(ct)) * 10) / 10) : "");
+
+  async function master() {
+    const { rows } = await api("GET", "/api/production/master");
+    const editable = can("production", "edit");
+    layout(`
+      <div class="head"><h1>Production master <small>(${rows.length} items)</small></h1>
+        <div class="actions"><a class="btn" href="#/production">← Production</a></div></div>
+      <p class="muted small">For each item you make: the <b>cycle time</b> for one piece, and the <b>material per piece</b> (raw material and bought-out parts).
+        The plan uses them to work out the working hours and the RM / BOP needed.</p>
+      <form class="filters" onsubmit="return false"><input id="mq" placeholder="Search item…"></form>
+      <div class="scroll"><table class="grid master">
+        <tr><th>Item</th><th>Type</th><th class="num">Cycle time (sec / pc)</th><th class="num">Pcs / hour</th><th>Material per piece</th><th></th></tr>
+        ${rows.map((r) => `<tr data-id="${r.id}">
+          <td><b>${h(r.code)}</b> · ${h(r.name)}</td><td>${h(r.category)}</td>
+          <td class="num">${editable ? `<input name="cycle_time" inputmode="decimal" class="qty ct" value="${r.cycle_time ?? ""}" placeholder="sec"><span class="saved" hidden>✓</span>` : h(r.cycle_time ?? "")}</td>
+          <td class="num pph">${perHour(r.cycle_time)}</td>
+          <td class="small">${r.bom ? h(r.bom) : '<span class="muted">not set</span>'}</td>
+          <td><a class="btn small" href="#/production/master/${r.id}">${editable ? "✏️ Material" : "View"}</a></td></tr>`).join("")
+          || '<tr><td colspan="6" class="muted">No finished goods, sub-assemblies or child parts yet. Add them in Products.</td></tr>'}
+      </table></div>`);
+    $("#mq").oninput = (e) => { const t = e.target.value.toLowerCase(); $$("table.master tr[data-id]").forEach((tr) => (tr.hidden = !tr.children[0].textContent.toLowerCase().includes(t))); };
+    $$("input.ct").forEach((inp) => (inp.onchange = async () => {
+      const tr = inp.closest("tr"), ok = $(".saved", tr);
+      try {
+        await api("PUT", `/api/production/master/${tr.dataset.id}`, { cycle_time: inp.value });
+        $(".pph", tr).textContent = perHour(inp.value); ok.hidden = false; setTimeout(() => (ok.hidden = true), 1500);
+      } catch (err) { flash(err.message, "error"); route(); }
+    }));
+  }
+
+  async function masterItem(id) {
+    const { rows } = await api("GET", "/api/production/master");
+    const r = rows.find((x) => String(x.id) === String(id));
+    if (!r) return layout('<h1>Item not found</h1><p><a class="btn" href="#/production/master">← Production master</a></p>');
+    const editable = can("production", "edit");
+    layout(`
+      <div class="head"><h1>${h(r.code)} · ${h(r.name)}</h1>
+        <div class="actions"><a class="btn" href="#/production/master">← Production master</a></div></div>
+      <form id="ctf" class="card narrow2"><h2>Cycle time</h2>
+        <div class="form-grid">
+          <label>Seconds per ${h(r.uom || "piece")} <input name="cycle_time" inputmode="decimal" value="${r.cycle_time ?? ""}" ${editable ? "" : "disabled"}></label>
+          <label>Pieces per hour <input id="pph" value="${perHour(r.cycle_time)}" disabled></label>
+        </div>
+        ${editable ? '<div class="buttons"><button class="btn primary">💾 Save cycle time</button><span id="ctok"></span></div>' : ""}
+      </form>`);
+    $("#ctf").cycle_time.oninput = (e) => ($("#pph").value = perHour(e.target.value));
+    $("#ctf").onsubmit = async (e) => {
+      e.preventDefault();
+      try { await api("PUT", `/api/production/master/${r.id}`, { cycle_time: e.target.cycle_time.value }); $("#ctok").innerHTML = ' <span class="pill ok">Saved</span>'; }
+      catch (err) { $("#ctok").innerHTML = errorBox([err.message]); }
+    };
+    await ctx.bomCard({ id: r.id, uom: r.uom }, editable);
+  }
+
+  /** "What this plan needs": working hours and RM / BOP against stock now. */
+  function needsBlock(n, word) {
+    if (!n) return "";
+    const shifts = n.hoursLeft ? Math.ceil((n.hoursLeft / 8) * 10) / 10 : 0;
+    const short = n.materials.filter((m) => m.short > 0);
+    return `<section class="needs card">
+      <h2>What this ${word}'s plan needs</h2>
+      <div class="kpis">
+        <div class="kpi"><span>Working hours, full plan</span><b>${qtyFmt(n.hoursPlan)} h</b><small>planned qty × cycle time</small></div>
+        <div class="kpi ${n.hoursLeft ? "info" : ""}"><span>Hours still to run</span><b>${qtyFmt(n.hoursLeft)} h</b><small>${shifts ? `≈ ${qtyFmt(shifts)} shifts of 8 h` : "nothing left"}</small></div>
+        <div class="kpi ${short.length ? "warn" : ""}"><span>RM / BOP short</span><b>${short.length}</b><small>${short.length ? "items to buy or arrange" : "enough in stock"}</small></div>
+      </div>
+      ${n.noCycle.length ? `<p class="small warnline">⏱ No cycle time for ${h(n.noCycle.join(", "))}, so the hours leave them out. <a href="#/production/master">Set it in Production master</a>.</p>` : ""}
+      ${n.noBom.length ? `<p class="small warnline">🧾 No material per piece for ${h(n.noBom.join(", "))}, so the list below leaves them out. <a href="#/production/master">Set it in Production master</a>.</p>` : ""}
+      ${n.materials.length ? `<div class="scroll"><table class="grid mini needtable">
+        <tr><th>RM / BOP</th><th>Type</th><th class="num">For full plan</th><th class="num">Still needed</th><th class="num">In stock</th><th class="num">Short</th></tr>
+        ${n.materials.map((m) => `<tr class="click ${m.short > 0 ? "isshort" : ""}" data-href="#/stock/${m.id}"><td><b>${h(m.code)}</b> · ${h(m.name)}</td><td>${h(m.category)}</td>
+          <td class="num">${qtyFmt(m.need_plan)}</td><td class="num">${qtyFmt(m.need_left)} <span class="muted small">${h(m.uom || "")}</span></td>
+          <td class="num ${m.stock < 0 ? "neg" : ""}">${qtyFmt(m.stock)}</td>
+          <td class="num">${m.short > 0 ? `<span class="st late">${qtyFmt(m.short)} short</span>` : '<span class="st done">OK</span>'}</td></tr>`).join("")}
+      </table></div>` : ""}
+    </section>`;
+  }
+
+  return { board, edit, master, masterItem };
 }

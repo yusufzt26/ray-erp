@@ -348,7 +348,7 @@ button.unlink:hover { text-decoration: underline; }
 .overall .ohead { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: .5rem; font-size: 1.1rem; }
 .overall .pbar { height: 14px; width: 100%; }
 .overall p { margin: .5rem 0 0; }
-.pbar { display: inline-block; vertical-align: middle; width: 80px; height: 9px; border-radius: 99px; background: #e3e8ee; overflow: hidden; }
+.pbar { display: inline-block; vertical-align: middle; width: 60px; height: 9px; border-radius: 99px; background: #e3e8ee; overflow: hidden; }
 .pbar i { display: block; height: 100%; background: #9aa8b6; border-radius: 99px; }
 .pbar.done i { background: #2e9e6b; } .pbar.prog i { background: #e08a1e; } .pbar.late i { background: #c94a4a; }
 .pcell { white-space: nowrap; } .pcell small { margin-left: .4rem; color: var(--muted); }
@@ -395,3 +395,10 @@ button.unlink:hover { text-decoration: underline; }
 #entries .filters { margin: .4rem 0 .6rem; }
 details.allplans { margin-top: 1.4rem; } details.allplans summary { cursor: pointer; font-weight: 600; margin-bottom: .6rem; }
 @media (max-width: 760px) { .entrybar label, .entrybar label.grow { flex: 1 1 45%; } .entrybar .btn.primary { flex: 1 1 100%; } }
+/* Production master and plan needs */
+.needs { margin-top: 1rem; } .needs h2 { margin: 0 0 .7rem; font-size: 1.15rem; }
+.needs .kpis { margin-bottom: .6rem; }
+.warnline { background: #fdf0d5; color: #6b4600; padding: .4rem .7rem; border-radius: 8px; margin: .4rem 0; }
+.needtable tr.isshort td { background: var(--err); }
+table.master input.ct { width: 6rem; text-align: right; }
+table.master .saved { color: var(--ok-ink); font-weight: 700; margin-left: .3rem; }

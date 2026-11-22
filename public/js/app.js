@@ -986,7 +986,7 @@ pages.notFound = () => layout(`<h1>Page not found</h1><p><a class="btn" href="#/
 
 const more = morePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 const bank = bankPages({ api, layout, can, flash, $, $$, errorBox, busy });
-const plan = planPages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
+const plan = planPages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden(), bomCard: (p, ed) => more.bomCard(p, ed) });
 const inv = invoicePages({ api, layout, can, flash, $, $$, errorBox, busy, get S() { return S; }, forbidden: () => pages.forbidden() });
 
 // ------------------------------------------------------------------ router
@@ -1045,6 +1045,7 @@ async function routeInner() {
     }
     if (p[0] === "production") {
       if (!can("production")) return pages.forbidden();
+      if (p[1] === "master") return p[2] ? await plan.masterItem(p[2]) : await plan.master();
       if (p[1] === "daily" || p[1] === "log") { location.hash = "#/production"; return; } // old links: everything is on one page now
       return p[2] === "edit" ? await plan.edit(p[1]) : await plan.board();
     }
