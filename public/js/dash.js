@@ -28,8 +28,9 @@ export const DASHBOARDS = {
   sales: { label: "Sales", icon: "📈", perm: "sales_invoice" },
   purchase: { label: "Purchase", icon: "🛒", perm: "vendor_invoice" },
   store: { label: "Store", icon: "📦", perm: "stock" },
+  production: { label: "Production", icon: "🏭", perm: "production", level: "edit" },
 };
-export const defaultDash = (role) => ({ Admin: "admin", Sales: "sales", Purchaser: "purchase", Store: "store", Production: "store", Accounts: "sales" })[role] || "sales";
+export const defaultDash = (role) => ({ Admin: "admin", Sales: "sales", Purchaser: "purchase", Store: "store", Production: "production", Accounts: "sales" })[role] || "sales";
 
 /** "Production this week: 68% done" card; links to the plan board. */
 function productionKpi(pr) {
@@ -107,6 +108,37 @@ export function renderDash(view, d) {
         ${panel("Latest vendor bills", d.recentBills.length ? `<div class="scroll"><table class="grid mini"><tr><th>Date</th><th>Vendor</th><th>Bill No</th><th class="num">Total</th></tr>
           ${d.recentBills.map((r) => `<tr class="click" data-href="#/d/vendor_invoice/${r.id}"><td>${dmy(r.doc_date)}</td><td>${h(r.party_name)}</td><td>${h(r.doc_no)}</td><td class="num">${rs(r.total_amount)}</td></tr>`).join("")}</table></div>`
           : '<p class="muted small">No bills yet.</p>', "wide", '<a href="#/d/vendor_invoice/upload">⬆ Upload bill</a>')}
+      </div>`;
+  }
+  if (view === "production") {
+    const pr = d.production;
+    const p = pr && pr.planned > 0 ? Math.min(100, Math.round((pr.done / pr.planned) * 100)) : 0;
+    const word = pr?.period === "month" ? "month" : "week";
+    const dayLabel = (iso) => `${Number(iso.slice(8, 10))}/${Number(iso.slice(5, 7))}`;
+    const lines = d.planLines || [];
+    const late = lines.filter((l) => l.target && l.target < d.today && l.done < l.planned);
+    return `
+      <div class="kpis">
+        ${productionKpi(pr)}
+        ${kpi("Made today", qty(d.madeToday), `${d.entriesToday} ${d.entriesToday === 1 ? "entry" : "entries"}`, "", "#/production")}
+        ${kpi("Made this week", qty(d.madeWeek), "Monday to today", "", "#/production")}
+        ${kpi("Made this month", qty(d.madeMonth), "", "", "#/production?period=month")}
+        ${kpi("Late rows", late.length, late.length ? "past target, not finished" : "nothing late", late.length ? "warn" : "", "#/production")}
+      </div>
+      <div class="dgrid">
+        ${panel("Made per day, last 14 days", columns(d.days.map(dayLabel), [{ name: "Made", values: d.madeByDay, color: COLORS[2] }], { fmt: qty }), "wide", '<a href="#/production">Production →</a>')}
+        ${panel(pr ? `Plan vs done, this ${word} (${p}%)` : "Plan vs done", lines.length ? `<div class="scroll"><table class="grid mini"><tr><th>Product</th><th class="num">Planned</th><th class="num">Done</th><th>Progress</th></tr>
+          ${lines.map((l) => { const lp = l.planned ? Math.min(100, Math.round((l.done / l.planned) * 100)) : 0;
+            const tone = l.done >= l.planned ? "done" : l.target && l.target < d.today ? "late" : l.done ? "prog" : "none";
+            return `<tr><td>${h(l.code)} · ${h(l.name)}</td><td class="num">${qty(l.planned)}</td><td class="num">${qty(l.done)}</td>
+              <td class="pcell"><span class="pbar ${tone}"><i style="width:${lp}%"></i></span><small>${lp}%</small></td></tr>`; }).join("")}</table></div>`
+          : '<p class="muted small">No plan for this week or month yet.</p>', "wide", '<a href="#/production">Open plan →</a>')}
+        ${panel("Made this month, by product", bars(d.topMade.map((r) => ({ label: r.label, value: Number(r.value), sub: r.uom })), { color: COLORS[2], fmt: qty, empty: "Nothing made this month yet." }))}
+        ${panel("Made this month, by shift", donut(d.byShift.map((r) => ({ label: r.label === "No shift" ? r.label : "Shift " + r.label, value: Number(r.value) })), { fmt: qty }))}
+        ${panel("Made by month, last 12 months", columns(L, [{ name: "Made", values: d.productionByMonth, color: COLORS[2] }], { fmt: qty }), "wide")}
+        ${panel("Latest entries", d.recentEntries.length ? `<div class="scroll"><table class="grid mini"><tr><th>Date</th><th>Shift</th><th>Product</th><th class="num">Qty</th><th>Operator</th></tr>
+          ${d.recentEntries.map((r) => `<tr><td>${dmy(r.log_date)}</td><td>${h(r.shift || "")}</td><td>${h(r.code)} · ${h(r.name)}</td><td class="num">${qty(r.qty)}</td><td>${h(r.operator || "")}</td></tr>`).join("")}</table></div>`
+          : '<p class="muted small">No entries yet.</p>', "wide", '<a href="#/production">Log production →</a>')}
       </div>`;
   }
   // store

@@ -75,9 +75,7 @@ function layout(body) {
     ${navGroup("Purchase", "purchase", "")}
     ${can("stock") || can("production") || can("sales_invoice") || can("accounts") ? '<div class="sec">Stock & Accounts</div>' : ""}
     ${can("stock") ? `<a href="#/stock" class="${on("#/stock")}">📊 Stock</a>` : ""}
-    ${can("production") ? `<a href="#/production" class="${r.startsWith("#/production") && !r.startsWith("#/production/daily") && !r.startsWith("#/production/log") ? "on" : ""}">🗓️ Production Plan</a>
-      ${can("production", "edit") ? `<a href="#/production/daily" class="${on("#/production/daily")}">📝 Daily Production</a>` : ""}
-      <a href="#/production/log" class="${on("#/production/log")}">📋 Production Log</a>` : ""}
+    ${can("production") ? `<a href="#/production" class="${on("#/production")}">🏭 Production</a>` : ""}
     ${can("sales_invoice") ? `<a href="#/sales-register" class="${on("#/sales-register")}">📈 Sales Register</a>` : ""}
     ${can("accounts") ? `<a href="#/accounts" class="${on("#/accounts") || on("#/payments")}">💰 Accounts</a>
       <a href="#/bank" class="${on("#/bank")}">🏦 Bank</a>` : ""}
@@ -137,15 +135,14 @@ pages.login = () => {
 pages.dashboard = async () => {
   const quick = [
     can("sales_invoice", "edit") && ["#/invoices/new", "🧾 New Sales Invoice", "From a customer PO"],
-    can("production", "edit") && ["#/production/daily", "📝 Daily Production", "Enter what was made today"],
-    can("production") && ["#/production", "🗓️ Production Plan", can("production", "edit") ? "Plan the week, log what's done" : "Planned vs done"],
+    can("production") && ["#/production", "🏭 Production", can("production", "edit") ? "Plan, log what's made, trace" : "Planned vs done"],
     can("stock", "edit") && ["#/stock/entry", "📊 Stock Entry", "Opening, production, issue"],
     can("accounts", "edit") && ["#/payments/new?dir=in", "💰 Payment Received", "From a customer"],
     can("customer_po", "edit") && ["#/d/customer_po/upload", "⬆ Upload Customer PO", "PDF, Excel or photo → auto-fill"],
     can("vendor_invoice", "edit") && ["#/d/vendor_invoice/upload", "⬆ Upload Vendor Invoice", "PDF, Excel or photo → auto-fill"],
     can("products", "edit") && ["#/m/products/new", "＋ New Product", "Item code is automatic"],
   ].filter(Boolean);
-  const views = Object.entries(DASHBOARDS).filter(([k, v]) => (k === "admin" ? S.user.role === "Admin" : can(v.perm))).map(([k]) => k);
+  const views = Object.entries(DASHBOARDS).filter(([k, v]) => (k === "admin" ? S.user.role === "Admin" : can(v.perm, v.level || "view"))).map(([k]) => k);
   const asked = new URLSearchParams(location.hash.split("?")[1] || "").get("view");
   const view = views.includes(asked) ? asked : views.includes(defaultDash(S.user.role)) ? defaultDash(S.user.role) : views[0];
   const d = view ? await api("GET", `/api/dash/${view}`) : null;
@@ -1048,8 +1045,7 @@ async function routeInner() {
     }
     if (p[0] === "production") {
       if (!can("production")) return pages.forbidden();
-      if (p[1] === "daily") return await plan.daily();
-      if (p[1] === "log") return await plan.log();
+      if (p[1] === "daily" || p[1] === "log") { location.hash = "#/production"; return; } // old links: everything is on one page now
       return p[2] === "edit" ? await plan.edit(p[1]) : await plan.board();
     }
     if (p[0] === "eway" && p[2]) {

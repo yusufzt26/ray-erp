@@ -1447,6 +1447,11 @@ route("POST", "/api/production/daily", async (c) => {
   if (lines.some((l: any) => l.qty! <= 0)) fail(400, "Quantities must be above zero.");
   await tx(async (query) => {
     for (const l of lines) {
+      if (!l.line_id && b.auto) // count toward the released plan row for this product and day (week first, rows still open first)
+        l.line_id = (await query(`SELECT l.id FROM production_plan_lines l JOIN production_plans pl ON pl.id = l.plan_id
+          WHERE l.product_id = $1 AND pl.status = 'Released' AND pl.start_date <= $2 AND pl.end_date >= $2
+          ORDER BY (COALESCE((SELECT SUM(g.qty) FROM production_logs g WHERE g.line_id = l.id), 0) < l.planned_qty) DESC, (pl.period = 'week') DESC, l.target_date NULLS LAST, l.id LIMIT 1`,
+          [l.product_id, day]))[0]?.id ?? null;
       if (l.line_id) {
         const ok = (await query(`SELECT 1 FROM production_plan_lines l JOIN production_plans pl ON pl.id = l.plan_id
           WHERE l.id = $1 AND l.product_id = $2 AND pl.status = 'Released'`, [l.line_id, l.product_id]))[0];
@@ -1507,7 +1512,7 @@ async function productionNow() {
 }
 
 // ---------------------------------------------------------------- department dashboards
-const DASH_VIEWS: Record<string, string> = { admin: "", sales: "sales_invoice", purchase: "vendor_invoice", store: "stock" };
+const DASH_VIEWS: Record<string, string> = { admin: "", sales: "sales_invoice", purchase: "vendor_invoice", store: "stock", production: "production" };
 const todayIso = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10); // India time
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86400e3);
 
@@ -1535,7 +1540,7 @@ route("GET", "/api/dash/:view", async (c) => {
   if (!c.user) fail(401, "Please log in.");
   const view = c.params.view;
   if (!(view in DASH_VIEWS)) fail(404, "Unknown dashboard");
-  if (view === "admin" ? c.user!.role !== "Admin" : c.perms[DASH_VIEWS[view]] === "none") fail(403, "Not allowed");
+  if (view === "admin" ? c.user!.role !== "Admin" : view === "production" ? c.perms.production !== "edit" : c.perms[DASH_VIEWS[view]] === "none") fail(403, "Not allowed");
   const today = todayIso();
   const [y, m] = today.split("-").map(Number);
   const fyStart = `${m >= 4 ? y : y - 1}-04-01`;
@@ -1607,6 +1612,36 @@ route("GET", "/api/dash/:view", async (c) => {
       FROM stock_moves m JOIN products p ON p.id = m.product_id GROUP BY m.batch ORDER BY MAX(m.id) DESC LIMIT 6`);
   }
   if ((view === "store" || view === "admin") && c.perms.production !== "none") out.production = await productionNow();
+  if (view === "production") {
+    const days: string[] = [];
+    for (let i = 13; i >= 0; i--) days.push(new Date(Date.parse(today) - i * 86400e3).toISOString().slice(0, 10));
+    const daily = await q(`SELECT to_char(log_date, 'YYYY-MM-DD') AS d, SUM(qty) AS q FROM production_logs WHERE log_date >= $1 GROUP BY 1`, [days[0]]);
+    const dby = Object.fromEntries(daily.map((r) => [r.d, Number(r.q)]));
+    out.days = days; out.madeByDay = days.map((dd) => dby[dd] || 0);
+    const made = await q(`SELECT to_char(move_date, 'YYYY-MM') AS m, SUM(qty) AS q FROM stock_moves WHERE kind = 'Production' AND move_date >= $1 GROUP BY 1`, [from12]);
+    const mby = Object.fromEntries(made.map((r) => [r.m, Number(r.q)]));
+    out.productionByMonth = months.map((mm) => mby[mm] || 0);
+    const sumFrom = async (from: string) => Number((await one("SELECT COALESCE(SUM(qty), 0) AS s FROM production_logs WHERE log_date >= $1 AND log_date <= $2", [from, today])).s);
+    out.madeToday = await sumFrom(today);
+    out.madeWeek = await sumFrom(planRange("week", today).start);
+    out.madeMonth = await sumFrom(thisMonth + "-01");
+    out.entriesToday = Number((await one("SELECT COUNT(*) AS n FROM production_logs WHERE log_date = $1", [today])).n);
+    out.production = await productionNow();
+    out.planLines = [];
+    for (const period of ["week", "month"]) {
+      const pl = await one("SELECT id FROM production_plans WHERE period = $1 AND start_date = $2", [period, planRange(period, today).start]);
+      if (!pl) continue;
+      const lines = await q(PLAN_LINES_SQL + " WHERE l.plan_id = $1 ORDER BY l.line_no, l.id", [pl.id]);
+      if (!lines.length) continue;
+      out.planLines = lines.map((l) => ({ code: l.code, name: l.name, uom: l.uom, planned: Number(l.planned_qty), done: Number(l.done), target: l.target_date, order_no: l.order_no }));
+      break;
+    }
+    out.byShift = await q(`SELECT COALESCE(NULLIF(shift, ''), 'No shift') AS label, SUM(qty) AS value FROM production_logs WHERE log_date >= $1 GROUP BY 1 ORDER BY 2 DESC`, [thisMonth + "-01"]);
+    out.topMade = await q(`SELECT p.code || ' · ' || p.name AS label, SUM(g.qty) AS value, p.uom FROM production_logs g JOIN products p ON p.id = g.product_id
+      WHERE g.log_date >= $1 GROUP BY p.code, p.name, p.uom ORDER BY value DESC LIMIT 8`, [thisMonth + "-01"]);
+    out.recentEntries = await q(`SELECT to_char(g.log_date, 'YYYY-MM-DD') AS log_date, g.shift, g.qty, g.operator, p.code, p.name FROM production_logs g
+      JOIN products p ON p.id = g.product_id ORDER BY g.log_date DESC, g.id DESC LIMIT 8`);
+  }
   if (view === "admin") {
     out.users = Number((await one("SELECT COUNT(*) AS n FROM users WHERE active = 1")).n);
     out.counts = {

@@ -383,3 +383,15 @@ button.unlink:hover { text-decoration: underline; }
 .filters label { display: inline-flex; align-items: center; gap: .3rem; }
 .filters label input[type=date] { width: auto; }
 .grid.tracelog td { vertical-align: top; }
+/* Production: one entry bar, entries list, all plans */
+.entrybar { padding: .9rem 1rem; margin-bottom: 1rem; border-left: 4px solid var(--brand-2); }
+.entrybar .ehead { display: flex; flex-wrap: wrap; gap: .3rem 1rem; align-items: baseline; margin-bottom: .6rem; }
+.entrybar .efields { display: flex; flex-wrap: wrap; gap: .5rem .7rem; align-items: flex-end; }
+.entrybar label { display: flex; flex-direction: column; gap: .15rem; font-size: .8rem; color: var(--muted); margin: 0; }
+.entrybar label.grow { flex: 1 1 14rem; }
+.entrybar input, .entrybar select { width: 100%; }
+.entrybar input.qty { width: 7rem; }
+.head.sub { margin-top: 1.4rem; } .head.sub h2 { margin: 0; font-size: 1.15rem; }
+#entries .filters { margin: .4rem 0 .6rem; }
+details.allplans { margin-top: 1.4rem; } details.allplans summary { cursor: pointer; font-weight: 600; margin-bottom: .6rem; }
+@media (max-width: 760px) { .entrybar label, .entrybar label.grow { flex: 1 1 45%; } .entrybar .btn.primary { flex: 1 1 100%; } }

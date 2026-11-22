@@ -157,8 +157,9 @@ await p.goto(U + "/#/stock/1"); await p.waitForSelector("text=in stock now");
 ok((await p.textContent("main")).includes("Dispatched") && (await p.textContent("main")).includes("Production"), "item stock history");
 await p.screenshot({ path: join(SHOTS, "stock_item.png"), fullPage: true });
 
-// production plan: make this week's plan, release it, log finished qty (adds to stock via material per piece), undo
-await p.goto(U + "/#/production"); await p.waitForSelector("text=No plan for this week yet");
+// production (one page): make this week's plan, release it, log partial entries from the one entry bar,
+// trace them in the entries list, Admin edits / deletes, and deleting the plan reverses its stock
+await p.goto(U + "/#/production"); await p.waitForSelector("text=No plan for this week");
 await p.click("#make"); await p.waitForSelector("text=Save plan");
 await p.selectOption("#rows tr:first-child [name=product_id]", "1"); await p.fill("#rows tr:first-child [name=planned_qty]", "200");
 await p.click("#add"); await p.selectOption("#rows tr:nth-child(2) [name=product_id]", "3"); await p.fill("#rows tr:nth-child(2) [name=planned_qty]", "50");
@@ -166,67 +167,66 @@ await p.fill("#rows tr:nth-child(2) [name=target_date]", "2020-01-06");
 await p.fill("#rows tr:first-child [name=notes]", "For Monday dispatch"); await p.fill("[name=plan_notes]", "Fuel line first, connectors after.");
 await p.screenshot({ path: join(SHOTS, "plan_edit.png"), fullPage: true });
 await p.click("button:has-text('Save plan')"); await p.waitForSelector("text=Release plan");
-ok(await p.isVisible(".pill:has-text('Draft')") && !(await p.isVisible("button.plus")), "plan saved as draft, no Done buttons yet");
+ok(await p.isVisible(".pill:has-text('Draft')") && !(await p.isVisible("button.plus")), "plan saved as draft, no Log buttons yet");
 await p.click("#release"); await p.waitForSelector("text=Plan released");
 const fgP = Number((await stockOf(1)).balance), rmP = Number((await stockOf(2)).balance);
-await p.click("tr[data-line] >> nth=0 >> button.plus");
-await p.fill("tr.logrow:not([hidden]) [name=qty]", "60"); await p.click("tr.logrow:not([hidden]) button:has-text('Save')");
-await p.waitForSelector("text=Finished quantity saved");
-await p.click("tr[data-line] >> nth=0 >> button.plus");
-await p.fill("tr.logrow:not([hidden]) [name=qty]", "40"); await p.click("tr.logrow:not([hidden]) button:has-text('Save')");
-await p.waitForSelector("tr[data-line] >> nth=0 >> text=50%");
-ok(Number((await stockOf(1)).balance) === fgP + 100, "logging done adds finished goods to stock");
-ok(Math.abs(Number((await stockOf(2)).balance) - (rmP - 45)) < 1e-6, "logging done uses up raw material per piece");
+const logEntry = async (qty, extra = {}) => {
+  await p.click("tr[data-line] >> nth=0 >> button.plus");
+  ok(await p.inputValue("#entry [name=product_id]") === "1", "＋ Log picks the row's product in the entry bar");
+  if (extra.shift) await p.selectOption("#entry [name=shift]", extra.shift);
+  if (extra.operator) await p.fill("#entry [name=operator]", extra.operator);
+  if (extra.remarks) await p.fill("#entry [name=remarks]", extra.remarks);
+  await p.fill("#entry [name=qty]", String(qty));
+  await Promise.all([p.waitForResponse((r) => r.url().includes("/api/production/daily")), p.click("#entry button.primary")]);
+  await p.waitForSelector(`#elist >> text=${extra.remarks || qty}`);
+};
+await logEntry(60);
+await logEntry(40, { shift: "A", operator: "Ramesh", remarks: "first lot" });
+ok(Number((await stockOf(1)).balance) === fgP + 100, "entries add finished goods to stock");
+ok(Math.abs(Number((await stockOf(2)).balance) - (rmP - 45)) < 1e-6, "entries use up raw material per piece");
+ok(await p.inputValue("#entry [name=operator]") === "Ramesh", "operator remembered for the next entry");
 const row1 = await p.textContent("tr[data-line] >> nth=0");
-ok(row1.includes("In progress") && row1.includes("50%"), "row shows 100 of 200 in progress");
+ok(row1.includes("In progress") && row1.includes("50%"), "partial entries add up on the plan row: 100 of 200");
 ok((await p.textContent("tr[data-line] >> nth=1")).includes("Late"), "row past its target date shows Late");
 ok((await p.textContent(".overall")).includes("40% done"), "overall progress 100 of 250 = 40%");
-await p.screenshot({ path: join(SHOTS, "plan_board.png"), fullPage: true });
+ok((await p.$$("#elist table.tracelog tr")).length === 3, "each partial entry listed separately on the same page");
+await p.screenshot({ path: join(SHOTS, "production.png"), fullPage: true });
+// entry for a product not in the plan still works (stand-alone)
+await p.selectOption("#entry [name=product_id]", "3"); await p.fill("#entry [name=qty]", "5"); await p.fill("#entry [name=remarks]", "spare");
+await Promise.all([p.waitForResponse((r) => r.url().includes("/api/production/daily")), p.click("#entry button.primary")]);
+await p.waitForSelector("#elist >> text=spare");
+ok((await p.textContent("tr[data-line] >> nth=1")).includes("10%"), "entry counts toward its own plan row (5 of 50)");
+// trace: filter the entries by product and shift
 await p.click("tr[data-line] >> nth=0 >> a.donecount");
-await p.screenshot({ path: join(SHOTS, "plan_logs.png"), fullPage: true });
-await p.click("tr.logrow:not([hidden]) button.undo >> nth=0"); await p.click("tr.logrow:not([hidden]) button.undo >> nth=0");
-await p.waitForSelector("text=Entry undone"); await p.waitForSelector("tr[data-line] >> nth=0 >> text=20%");
-ok(Number((await stockOf(1)).balance) === fgP + 40, "undo removes its stock entry");
-await p.goto(U + "/#/?view=admin"); await p.waitForSelector("text=Production this week");
-ok((await p.textContent(".kpis")).includes("16% done"), "dashboard card shows production this week");
-await p.screenshot({ path: join(SHOTS, "plan_dash.png") });
-
-// daily production entry: partial entries for any date, counted toward the plan row, traced in the log
-await p.goto(U + "/#/production/daily"); await p.waitForSelector("text=Daily production entry");
-await p.selectOption("[name=shift]", "A"); await p.fill("[name=operator]", "Ramesh");
-await p.selectOption("#rows tr:nth-child(1) [name=product_id]", "1"); await p.fill("#rows tr:nth-child(1) [name=qty]", "30");
-ok((await p.inputValue("#rows tr:nth-child(1) [name=line_id]")) !== "", "daily entry picks the open plan row");
-await p.fill("#rows tr:nth-child(1) [name=remarks]", "first lot");
-await p.selectOption("#rows tr:nth-child(2) [name=product_id]", "1"); await p.fill("#rows tr:nth-child(2) [name=qty]", "20");
-await p.screenshot({ path: join(SHOTS, "daily_entry.png"), fullPage: true });
-const fgD = Number((await stockOf(1)).balance);
-await p.click("button:has-text('Save entries')"); await p.waitForSelector("text=2 entries saved");
-ok(Number((await stockOf(1)).balance) === fgD + 50, "daily entries add to stock");
-ok(await p.inputValue("[name=operator]") === "Ramesh" && await p.inputValue("[name=shift]") === "A", "shift and operator kept for the next entry");
-ok((await p.textContent("main")).includes("first lot"), "today's entries listed under the form");
-await p.goto(U + "/#/production"); await p.waitForSelector(".overall");
-ok((await p.textContent("tr[data-line] >> nth=0")).includes("45%"), "daily entries count toward the plan row (40 + 50 of 200)");
-await p.goto(U + "/#/production/log"); await p.waitForSelector("text=All entries");
-const logTxt = await p.textContent("main");
-ok(logTxt.includes("Ramesh") && logTxt.includes("Week 16/11/2026") && logTxt.includes("first lot"), "log shows operator, plan and remarks");
-ok((await p.$$("table.tracelog tr")).length === 4, "log has every partial entry separately (3)");
-await p.screenshot({ path: join(SHOTS, "production_log.png"), fullPage: true });
-await p.goto(U + "/#/production/log?product=1"); await p.waitForSelector("h1 >> text=FG-00001");
-ok((await p.textContent("h1")).includes("FG-00001"), "trace one product");
-
-// Admin edits a production entry (stock follows) and deletes a plan with its entries (stock reversed)
+ok((await p.$$("#elist table.tracelog tr")).length === 3, "clicking Done shows only that product's entries");
+await p.selectOption("#eflt [name=shift]", "A");
+ok((await p.$$("#elist table.tracelog tr")).length === 2, "filter by shift");
+await p.selectOption("#eflt [name=shift]", ""); await p.selectOption("#eflt [name=product]", "");
+// Admin edits an entry (stock follows), and deletes one
 const fgE = Number((await stockOf(1)).balance);
-await p.click("button.editlog >> nth=0"); await p.waitForSelector("tr.editrow");
-await p.fill("tr.editrow [name=qty]", "25"); await p.fill("tr.editrow [name=remarks]", "recounted");
-await p.click("tr.editrow button:has-text('Save')"); await p.waitForSelector("text=Entry updated");
-await p.waitForSelector("text=recounted");
-ok(Number((await stockOf(1)).balance) === fgE + 5, "admin edits an entry: 20 → 25 and stock follows");
+await p.click("#elist tr:has-text('first lot') button.editlog"); await p.waitForSelector("tr.editrow");
+await p.fill("tr.editrow [name=qty]", "45"); await p.fill("tr.editrow [name=remarks]", "recounted");
+await p.click("tr.editrow button:has-text('Save')"); await p.waitForSelector("text=Entry updated"); await p.waitForSelector("#elist >> text=recounted");
+ok(Number((await stockOf(1)).balance) === fgE + 5, "admin edits an entry: 40 → 45 and stock follows");
+await p.click("#elist tr:has-text('spare') button.undo"); await p.click("#elist tr:has-text('spare') button.undo");
+await p.waitForSelector("text=Entry undone");
+ok(!(await p.isVisible("#elist >> text=spare")), "admin deletes an entry");
+await p.goto(U + "/#/production/log"); await p.waitForSelector("h1 >> text=Production");
+ok((await p.evaluate(() => location.hash)) === "#/production", "old log link opens the one Production page");
+await p.goto(U + "/#/?view=admin"); await p.waitForSelector("text=Production this week");
+ok((await p.textContent(".kpis")).includes("42% done"), "dashboard card shows production this week (105 of 250)");
+await p.screenshot({ path: join(SHOTS, "plan_dash.png") });
+await p.goto(U + "/#/?view=production"); await p.waitForSelector("text=Made per day, last 14 days");
+const pd = await p.textContent("main");
+ok(pd.includes("Made today") && pd.includes("Plan vs done, this week (42%)") && pd.includes("Late rows"), "production dashboard: today, plan vs done, late rows");
+await p.screenshot({ path: join(SHOTS, "dash_production.png"), fullPage: true });
+// Admin deletes the plan from All plans: its entries and their stock go too
 await p.goto(U + "/#/production"); await p.waitForSelector("text=All plans");
+await p.click("details.allplans summary");
 await p.click("button.delplan"); await p.waitForSelector("text=Delete plan and its entries? Click again");
-await p.click("button.delplan"); await p.waitForSelector("text=Plan deleted, with its 3 production entries");
-ok(Number((await stockOf(1)).balance) === fgE + 5 - 95, "deleting the plan reverses its stock entries");
-ok(await p.isVisible("text=No plan for this week yet"), "plan gone");
-await p.goto(U + "/#/production?period=month"); await p.waitForSelector("text=No plan for this month yet");
+await p.click("button.delplan"); await p.waitForSelector("text=Plan deleted, with its 2 production entries");
+ok(Number((await stockOf(1)).balance) === fgP, "deleting the plan reverses its stock entries");
+await p.goto(U + "/#/production?period=month"); await p.waitForSelector("text=No plan for this month");
 ok(true, "month view");
 
 // sales register
