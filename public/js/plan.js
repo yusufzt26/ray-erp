@@ -315,7 +315,7 @@ export function planPages(ctx) {
         ${compact ? "" : `<td>${r.plan_start ? `<a href="#/production?period=${r.period}&date=${r.plan_start}">${r.period === "month" ? "Month" : "Week"} ${dmy(r.plan_start)}</a>` : '<span class="muted">—</span>'}</td>
         <td>${r.order_id ? `<a href="#/d/customer_po/${r.order_id}">${h(r.order_no || "SO")}</a><div class="muted small">${h(r.order_party || "")}</div>` : '<span class="muted">—</span>'}</td>`}
         <td>${h(r.remarks || "")}</td>
-        ${compact ? "" : `<td class="small">${h(r.consumed || "")}</td>`}
+        ${compact ? "" : `<td class="small wrap">${h(r.consumed || "").replace(/, /g, "<br>")}</td>`}
         <td class="small">${h(r.by_user || "")}<div class="muted">${h(r.entered_at || "")}</div></td>
         ${editable ? `<td class="nowrap">${isAdmin() ? `<button type="button" class="btn small editlog" data-log="${r.id}">✏️ Edit</button>` : ""}<button type="button" class="btn small undo" data-log="${r.id}">${isAdmin() ? "🗑 Delete" : "Undo"}</button></td>` : ""}</tr>`).join("")}
     </table></div>`;
@@ -356,6 +356,13 @@ export function planPages(ctx) {
 
   // ============================================================== PRODUCTION MASTER
   // Per item made in-house: cycle time (seconds per piece) and material per piece (RM / BOP).
+  /** Material per piece as wrapping chips: RM first, then bought-out parts; the full name shows on hover. */
+  const bomChips = (bom) => {
+    const list = Array.isArray(bom) ? bom : [];
+    if (!list.length) return '<span class="muted small">not set</span>';
+    return `<div class="chips">${list.map((b) => `<span class="chip c-${h(String(b.cat || "").toLowerCase())}" title="${h(b.code)} · ${h(b.name)}">
+      <b>${h(b.code)}</b> ${h(String(b.name || "").length > 22 ? String(b.name).slice(0, 21) + "…" : b.name || "")} <i>× ${qtyFmt(b.qty)} ${h(b.uom || "")}</i></span>`).join("")}</div>`;
+  };
   const perHour = (ct) => (Number(ct) > 0 ? qtyFmt(Math.round((3600 / Number(ct)) * 10) / 10) : "");
 
   async function master() {
@@ -373,7 +380,7 @@ export function planPages(ctx) {
           <td><b>${h(r.code)}</b> · ${h(r.name)}</td><td>${h(r.category)}</td>
           <td class="num">${editable ? `<input name="cycle_time" inputmode="decimal" class="qty ct" value="${r.cycle_time ?? ""}" placeholder="sec"><span class="saved" hidden>✓</span>` : h(r.cycle_time ?? "")}</td>
           <td class="num pph">${perHour(r.cycle_time)}</td>
-          <td class="small">${r.bom ? h(r.bom) : '<span class="muted">not set</span>'}</td>
+          <td class="bomcell">${bomChips(r.bom)}</td>
           <td><a class="btn small" href="#/production/master/${r.id}">${editable ? "✏️ Material" : "View"}</a></td></tr>`).join("")
           || '<tr><td colspan="6" class="muted">No finished goods, sub-assemblies or child parts yet. Add them in Products.</td></tr>'}
       </table></div>`);

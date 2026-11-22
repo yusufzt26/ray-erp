@@ -402,3 +402,14 @@ details.allplans { margin-top: 1.4rem; } details.allplans summary { cursor: poin
 .needtable tr.isshort td { background: var(--err); }
 table.master input.ct { width: 6rem; text-align: right; }
 table.master .saved { color: var(--ok-ink); font-weight: 700; margin-left: .3rem; }
+/* Material per piece as chips that wrap; rows grow to fit */
+table.master td.bomcell { white-space: normal; min-width: 320px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px 5px; }
+.chip { background: #e8eef5; border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; font-size: .78rem; white-space: nowrap; line-height: 1.5; }
+.chip b { font-weight: 600; } .chip i { font-style: normal; color: var(--muted); }
+.chip.c-rm { background: #e6f2ff; border-color: #bcd6f2; }
+.chip.c-bo { background: #fdf3e3; border-color: #efd6aa; }
+table.grid.master td { vertical-align: top; }
+table.grid.tracelog td.wrap { min-width: 140px; }
+table.grid.master td:first-child { white-space: normal; min-width: 200px; max-width: 280px; }
+table.grid.master td.bomcell { width: 100%; }

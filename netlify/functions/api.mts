@@ -1323,7 +1323,8 @@ async function planNeeds(lines: any[]) {
 route("GET", "/api/production/master", async (c) => {
   require(c, "production");
   const rows = await q(`SELECT p.id, p.code, p.name, p.category, p.uom, p.cycle_time,
-      (SELECT string_agg(cp.code || ' × ' || b.qty_per || ' ' || COALESCE(cp.uom, ''), ', ' ORDER BY b.id) FROM product_bom b JOIN products cp ON cp.id = b.component_id WHERE b.product_id = p.id) AS bom
+      (SELECT json_agg(json_build_object('code', cp.code, 'name', cp.name, 'qty', b.qty_per, 'uom', cp.uom, 'cat', cp.category) ORDER BY cp.category DESC, b.id)
+        FROM product_bom b JOIN products cp ON cp.id = b.component_id WHERE b.product_id = p.id) AS bom
     FROM products p WHERE p.active = 1 AND p.category <> 'SV'
       AND (p.category IN ('FG', 'SA', 'CP') OR p.cycle_time IS NOT NULL OR EXISTS (SELECT 1 FROM product_bom b WHERE b.product_id = p.id))
     ORDER BY (p.category = 'FG') DESC, p.category, p.code`);
