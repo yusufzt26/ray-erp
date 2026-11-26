@@ -238,7 +238,8 @@ export function morePages(ctx) {
   // ============================================================== ACCOUNTS
   async function accounts() {
     const tab = params().get("tab") === "pay" ? "pay" : "recv";
-    const d = await api("GET", "/api/accounts/summary");
+    const [d, bk] = await Promise.all([api("GET", "/api/accounts/summary"), api("GET", "/api/bank/accounts").catch(() => null)]);
+    const bankAcc = bk ? bk.accounts.filter((a) => a.active) : [];
     const list = tab === "pay" ? d.payable : d.receivable;
     const dir = tab === "pay" ? "out" : "in";
     const total = (l) => r2(l.reduce((t, r) => t + Math.max(0, Number(r.balance)), 0));
@@ -252,6 +253,7 @@ export function morePages(ctx) {
       <div class="quick">
         <a class="tile ${tab === "recv" ? "sel" : ""}" href="#/accounts"><b class="big">₹ ${money(total(d.receivable))}</b><span>To collect from customers</span></a>
         <a class="tile ${tab === "pay" ? "sel" : ""}" href="#/accounts?tab=pay"><b class="big">₹ ${money(total(d.payable))}</b><span>To pay to vendors</span></a>
+        ${bankAcc.length ? `<a class="tile" href="#/bank/accounts"><b class="big">₹ ${money(bankAcc.reduce((t, a) => t + a.balance, 0))}</b><span>In the bank${bankAcc.length > 1 ? ` (${bankAcc.length} accounts)` : ""}</span></a>` : ""}
       </div>
       <div class="tabs"><a href="#/accounts" class="${tab === "recv" ? "on" : ""}">Customers (receivable)</a><a href="#/accounts?tab=pay" class="${tab === "pay" ? "on" : ""}">Vendors (payable)</a></div>
       <div class="scroll"><table class="grid">
