@@ -1055,6 +1055,7 @@ async function routeInner() {
     }
     if (p[0] === "bank") {
       if (!can("accounts")) return pages.forbidden();
+      if (p[1] === "accounts") return p[2] ? await bank.accountStatement(p[2]) : await bank.accounts();
       return p[1] === "expenses" ? await bank.expenses() : await bank.bank();
     }
     if (p[0] === "load-data") return await more.loadData();

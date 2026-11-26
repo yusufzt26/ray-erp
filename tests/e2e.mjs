@@ -485,6 +485,61 @@ ok(Number((await getJ("/api/stock")).rows.find((r) => r.id === 2).balance) === r
   ok((await getJ("/api/bills/in?party=1")).rows.find((b) => b.id === inv.id).pay_status !== "Paid", "undo removes the payment again");
 }
 
+// bank accounts: balance check, second account, transfers between own accounts, statement, cash expenses, delete lines
+{
+  const XLSX = require("xlsx");
+  const post = (path, body, method = "POST") => p.evaluate(async ([u, bd, m]) => (await fetch(u, { method: m, headers: { "content-type": "application/json", "x-requested-with": "ray-erp" }, body: JSON.stringify(bd) })).json(), [path, body, method]);
+  let accs = (await getJ("/api/bank/accounts")).accounts;
+  const main = accs[0];
+  ok(accs.length === 1 && main.name === "Main bank account", "first upload made a bank account");
+  ok(main.bank_balance === 322438.79 && Math.abs(main.difference) < 0.01 && main.opening_from_statement, "balance worked out from the statement agrees with the bank " + JSON.stringify([main.balance, main.bank_balance]));
+  await p.goto(U + "/#/bank/accounts?edit=" + main.id); await p.waitForSelector("#af");
+  await p.fill("#af [name=name]", "SBI current"); await p.fill("#af [name=account_no]", "62209116087"); await p.click("#asave");
+  await p.waitForSelector("text=SBI current saved");
+  await p.goto(U + "/#/bank/accounts?add=1"); await p.waitForSelector("#af");
+  await p.fill("#af [name=name]", "HDFC CC"); await p.fill("#af [name=opening_balance]", "1000"); await p.click("#asave");
+  await p.waitForSelector("text=HDFC CC saved");
+  accs = (await getJ("/api/bank/accounts")).accounts;
+  const hdfc = accs.find((a) => a.name === "HDFC CC"), sbi = accs.find((a) => a.name === "SBI current");
+  ok(hdfc && hdfc.balance === 1000 && sbi, "second account with opening balance");
+  const file = (name, rows) => { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Date", "Narration", "Ref", "Withdrawal", "Deposit", "Balance"], ...rows]), "S");
+    const f = join(mkdtempSync(join(tmpdir(), "bank-")), name); XLSX.writeFile(wb, f); return f; };
+  // newest first, as many banks give it
+  const fs = file("sbi_dec.xlsx", [["12/11/2026", "MISTAKE LINE", "", "1.00", "", "272437.79"], ["10/11/2026", "TO TRF HDFC CC 5021", "", "50000.00", "", "272438.79"]]);
+  const fh = file("hdfc.xlsx", [["11/11/2026", "BY TRF FROM SBI 6220", "", "", "50000.00", "51000.00"]]);
+  await p.goto(U + "/#/bank"); await p.waitForSelector("#upacc");
+  await p.selectOption("#upacc", String(sbi.id)); await p.setInputFiles("#file", fs); await p.waitForSelector("text=2 new entries loaded");
+  await p.selectOption("#upacc", String(hdfc.id)); await p.setInputFiles("#file", fh); await p.waitForSelector("text=1 new entries loaded");
+  const tr = (txt) => p.locator("table.bank tr", { hasText: txt });
+  ok(await tr("TRF HDFC").locator("[name=kind]").inputValue() === "transfer" && await tr("TRF HDFC").locator("[name=toacc]").inputValue() === String(hdfc.id), "transfer between own accounts suggested");
+  await p.screenshot({ path: join(SHOTS, "bank_transfer.png"), fullPage: true });
+  // delete the line uploaded by mistake
+  await p.locator("table.bank [name=tick]").evaluateAll((l) => l.forEach((x) => (x.checked = false)));
+  await tr("MISTAKE LINE").locator("[name=tick]").check(); await p.click("#del"); await p.waitForSelector("text=1 entries deleted");
+  await p.locator("table.bank [name=tick]").evaluateAll((l) => l.forEach((x) => (x.checked = false)));
+  await tr("TRF HDFC").locator("[name=tick]").check(); await p.click("#post"); await p.waitForSelector("text=1 entries posted");
+  ok(!(await p.isVisible("text=BY TRF FROM SBI")), "the other side of the transfer is closed too");
+  accs = (await getJ("/api/bank/accounts")).accounts;
+  ok(accs.find((a) => a.id === hdfc.id).balance === 51000 && Math.abs(accs.find((a) => a.id === sbi.id).difference) < 0.01 && Math.abs(accs.find((a) => a.id === hdfc.id).difference) < 0.01, "both accounts agree with the bank after the transfer");
+  ok(!(await getJ("/api/expenses")).rows.some((r) => r.amount === 50000), "a transfer is not an expense");
+  await p.goto(U + "/#/bank/accounts"); await p.waitForSelector("text=Matches bank");
+  await p.screenshot({ path: join(SHOTS, "bank_accounts.png"), fullPage: true });
+  await p.goto(U + "/#/bank/accounts/" + sbi.id); await p.waitForSelector("text=Closing");
+  ok(!(await p.isVisible("text=do not agree")) && (await p.textContent("table.grid")).includes("Transfer to HDFC CC"), "account statement with running balance agrees with the bank");
+  await p.screenshot({ path: join(SHOTS, "bank_statement.png"), fullPage: true });
+  await p.goto(U + "/#/bank?status=done&q=Transfer"); await p.waitForSelector("text=Posted as");
+  await p.locator("tr", { hasText: "TRF HDFC" }).locator("[data-undo]").click(); await p.waitForSelector("text=back in To match");
+  ok((await getJ("/api/bank?status=new")).lines.filter((l) => /TRF/.test(l.description)).length === 2, "undo of a transfer reopens both sides");
+  // cash expense
+  await p.goto(U + "/#/bank/expenses"); await p.waitForSelector("#addx"); await p.click("#addx");
+  await p.selectOption("#xf [name=category]", "Freight & transport"); await p.fill("#xf [name=amount]", "350"); await p.fill("#xf [name=description]", "Courier cash");
+  await p.click("#xsave"); await p.waitForSelector("text=Courier cash");
+  const cash = (await getJ("/api/expenses")).rows.find((r) => r.description === "Courier cash");
+  ok(cash && cash.paid_by === "Cash", "cash expense added");
+  await post("/api/expenses/" + cash.id, undefined, "DELETE");
+  ok(!(await getJ("/api/expenses")).rows.some((r) => r.description === "Courier cash"), "cash expense deleted");
+}
+
 // new category from the product form
 await p.goto(U + "/#/"); await p.goto(U + "/#/m/products/new"); await p.waitForSelector("[name=name]");
 await p.selectOption("[name=category]", "__new"); await p.waitForSelector("#nc_name");

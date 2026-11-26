@@ -2140,6 +2140,8 @@ async function bankSuggestions(lines: any[]) {
     return score >= 2 ? best : null;
   };
   const usedPay = new Set<number>();
+  const others = await q(`SELECT l.id, l.account_id, a.name AS account, to_char(l.txn_date, 'YYYY-MM-DD') AS day, l.debit, l.credit FROM bank_lines l
+    JOIN bank_accounts a ON a.id = l.account_id WHERE l.status = 'new'`);
   return lines.map((l) => {
     const credit = Number(l.credit) > 0;
     const amt = round2(credit ? Number(l.credit) : Number(l.debit));
@@ -2149,6 +2151,10 @@ async function bankSuggestions(lines: any[]) {
     const same = unbanked.find((p) => !usedPay.has(p.id) && p.direction === dir && Math.abs(Number(p.amount) - amt) <= 1
       && Math.abs(daysBetween(p.day, l.txn_date)) <= 7);
     if (same) { usedPay.add(same.id); return { kind: "link", payment_id: same.id, party_id: same.party_id, why: "A payment for this amount is already entered" }; }
+    // 1b. the opposite entry on another own account: a transfer between accounts
+    const twin = others.find((o) => o.account_id !== l.account_id && Math.abs(Number(credit ? o.debit : o.credit) - amt) <= 0.5
+      && Math.abs(daysBetween(o.day, l.txn_date)) <= 5);
+    if (twin) return { kind: "transfer", account_id: twin.account_id, why: `Same amount on ${twin.account} statement` };
     // 2. customer / vendor by name, by a remembered rule, or by an exact bill amount
     const list = credit ? customers : vendors, bills = credit ? billsIn : billsOut;
     let party = rule && rule.kind === dir ? list.find((c) => c.id === rule.party_id) : null;
@@ -2172,30 +2178,150 @@ async function bankSuggestions(lines: any[]) {
 
 route("GET", "/api/bank", async (c) => {
   require(c, "accounts");
-  const status = new URL(c.req.url).searchParams.get("status") === "done" ? "done" : "new";
-  const lines = await q(`SELECT id, to_char(txn_date, 'YYYY-MM-DD') AS txn_date, description, ref, debit, credit, balance, status, payment_id, expense_id, posted_as
-    FROM bank_lines WHERE ${status === "new" ? "status = 'new'" : "status <> 'new'"} ORDER BY txn_date ${status === "new" ? "" : "DESC"}, id LIMIT 500`);
+  const sp = new URL(c.req.url).searchParams;
+  const status = sp.get("status") === "done" ? "done" : "new";
+  const account = num(sp.get("account"));
+  const from = isoDate(sp.get("from")), to = isoDate(sp.get("to")), text = str(sp.get("q"));
+  const where = [status === "new" ? "l.status = 'new'" : "l.status <> 'new'"], args: any[] = [];
+  if (account) { args.push(account); where.push(`l.account_id = $${args.length}`); }
+  if (from) { args.push(from); where.push(`l.txn_date >= $${args.length}`); }
+  if (to) { args.push(to); where.push(`l.txn_date <= $${args.length}`); }
+  if (text) { args.push(`%${text}%`); where.push(`(l.description ILIKE $${args.length} OR l.ref ILIKE $${args.length} OR l.posted_as ILIKE $${args.length})`); }
+  const lines = await q(`SELECT l.id, to_char(l.txn_date, 'YYYY-MM-DD') AS txn_date, l.description, l.ref, l.debit, l.credit, l.balance, l.status, l.payment_id,
+      l.expense_id, l.posted_as, l.account_id, a.name AS account
+    FROM bank_lines l LEFT JOIN bank_accounts a ON a.id = l.account_id WHERE ${where.join(" AND ")}
+    ORDER BY l.txn_date ${status === "new" ? "" : "DESC"}, l.id ${status === "new" ? "" : "DESC"} LIMIT 1000`, args);
   const suggestions = status === "new" ? await bankSuggestions(lines) : [];
   return json({
     lines: lines.map((l, i) => ({ ...l, suggest: suggestions[i] || null })),
+    accounts: await q("SELECT id, name, bank_name, account_no, active FROM bank_accounts ORDER BY active DESC, name"),
     customers: await q("SELECT id, name FROM customers WHERE active = 1 ORDER BY name"),
     vendors: await q("SELECT id, name FROM vendors WHERE active = 1 ORDER BY name"),
     categories: EXPENSE_CATEGORIES,
-    bills: { in: (await billStatus("in")).rows.filter((b) => b.balance > 0.5), out: (await billStatus("out")).rows.filter((b) => b.balance > 0.5) },
+    bills: status === "new" ? { in: (await billStatus("in")).rows.filter((b) => b.balance > 0.5), out: (await billStatus("out")).rows.filter((b) => b.balance > 0.5) } : { in: [], out: [] },
   });
+});
+
+// ---------------------------------------------------------------- bank accounts
+const cleanAccount = (b: any) => {
+  const name = str(b.name).slice(0, 80) || fail(400, "Give the account a short name, e.g. HDFC current.");
+  const opening = b.opening_balance === "" || b.opening_balance === null || b.opening_balance === undefined ? null : num(b.opening_balance);
+  if (opening === null && str(b.opening_balance)) fail(400, "Opening balance must be a number.");
+  return [name, str(b.bank_name).slice(0, 80) || null, str(b.account_no).slice(0, 40) || null, str(b.ifsc).toUpperCase().slice(0, 20) || null,
+    str(b.branch).slice(0, 80) || null, opening, isoDate(b.opening_date), b.active === 0 || b.active === "0" || b.active === false ? 0 : 1, str(b.notes).slice(0, 300) || null];
+};
+
+/** Balance of each account: opening (typed in, or worked out from the first statement line) + money in - money out. */
+async function accountBalances() {
+  const accounts = await q(`SELECT id, name, bank_name, account_no, ifsc, branch, opening_balance, to_char(opening_date, 'YYYY-MM-DD') AS opening_date, active, notes
+    FROM bank_accounts ORDER BY active DESC, name`);
+  const stats = await q(`SELECT account_id, COUNT(*) AS n, SUM(credit) AS cr, SUM(debit) AS dr, COUNT(*) FILTER (WHERE status = 'new') AS pending,
+      to_char(MIN(txn_date), 'YYYY-MM-DD') AS first_day, to_char(MAX(txn_date), 'YYYY-MM-DD') AS last_day FROM bank_lines GROUP BY account_id`);
+  const firsts = await q(`SELECT DISTINCT ON (account_id) account_id, credit, debit, balance FROM bank_lines ORDER BY account_id, txn_date, id`);
+  const lasts = await q(`SELECT DISTINCT ON (account_id) account_id, balance, to_char(txn_date, 'YYYY-MM-DD') AS day FROM bank_lines
+    WHERE balance IS NOT NULL ORDER BY account_id, txn_date DESC, id DESC`);
+  return accounts.map((a) => {
+    const st = stats.find((x) => x.account_id === a.id) || {};
+    const f = firsts.find((x) => x.account_id === a.id), l = lasts.find((x) => x.account_id === a.id);
+    const fromStatement = a.opening_balance === null && f && f.balance !== null;
+    const opening = round2(a.opening_balance !== null ? Number(a.opening_balance) : fromStatement ? Number(f.balance) - Number(f.credit) + Number(f.debit) : 0);
+    const book = round2(opening + Number(st.cr || 0) - Number(st.dr || 0));
+    const bank = l ? round2(Number(l.balance)) : null;
+    return { ...a, opening, opening_from_statement: !!fromStatement, lines: Number(st.n || 0), pending: Number(st.pending || 0), money_in: round2(Number(st.cr || 0)),
+      money_out: round2(Number(st.dr || 0)), first_day: st.first_day || null, last_day: st.last_day || null, balance: book, bank_balance: bank, bank_balance_day: l?.day || null,
+      difference: bank === null ? null : round2(bank - book) };
+  });
+}
+
+route("GET", "/api/bank/accounts", async (c) => {
+  require(c, "accounts");
+  const accounts = await accountBalances();
+  // payments typed in on Accounts (not cash) that no statement line shows yet: cheques not cleared, entries not uploaded yet
+  const unbanked = await q(`SELECT p.id, p.direction, to_char(p.pay_date, 'YYYY-MM-DD') AS pay_date, p.amount, p.mode, p.reference,
+      CASE WHEN p.direction = 'in' THEN cu.name ELSE v.name END AS party
+    FROM payments p LEFT JOIN customers cu ON p.direction = 'in' AND cu.id = p.party_id LEFT JOIN vendors v ON p.direction = 'out' AND v.id = p.party_id
+    WHERE COALESCE(p.mode, '') <> 'Cash' AND NOT EXISTS (SELECT 1 FROM bank_lines b WHERE b.payment_id = p.id)
+    ORDER BY p.pay_date DESC, p.id DESC LIMIT 200`);
+  return json({ accounts, unbanked });
+});
+
+route("POST", "/api/bank/accounts", async (c) => {
+  require(c, "accounts", "edit");
+  const v = cleanAccount(c.body || {});
+  const row = await one("INSERT INTO bank_accounts (name, bank_name, account_no, ifsc, branch, opening_balance, opening_date, active, notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id", v);
+  return json({ id: row.id });
+});
+
+route("PUT", "/api/bank/accounts/:id", async (c) => {
+  require(c, "accounts", "edit");
+  const v = cleanAccount(c.body || {});
+  const res = await q("UPDATE bank_accounts SET name=$1, bank_name=$2, account_no=$3, ifsc=$4, branch=$5, opening_balance=$6, opening_date=$7, active=$8, notes=$9 WHERE id=$10 RETURNING id",
+    [...v, Number(c.params.id)]);
+  if (!res.length) fail(404, "Account not found.");
+  return json({ ok: true });
+});
+
+route("DELETE", "/api/bank/accounts/:id", async (c) => {
+  require(c, "accounts", "edit");
+  const id = Number(c.params.id);
+  const used = await one("SELECT COUNT(*) AS n FROM bank_lines WHERE account_id = $1", [id]);
+  if (Number(used.n)) fail(400, `This account has ${used.n} statement entries. Mark it inactive instead, or delete its entries first.`);
+  await q("DELETE FROM bank_accounts WHERE id = $1", [id]);
+  return json({ ok: true });
+});
+
+/** One account's entries with a running balance, checked against the bank's own balance column. */
+route("GET", "/api/bank/accounts/:id/statement", async (c) => {
+  require(c, "accounts");
+  const id = Number(c.params.id);
+  const acc = (await accountBalances()).find((a) => a.id === id) || fail(404, "Account not found.");
+  const sp = new URL(c.req.url).searchParams;
+  const from = isoDate(sp.get("from")) || "1900-01-01", to = isoDate(sp.get("to")) || "2999-12-31";
+  const before = await one("SELECT COALESCE(SUM(credit - debit), 0) AS net FROM bank_lines WHERE account_id = $1 AND txn_date < $2", [id, from]);
+  const rows = await q(`SELECT id, to_char(txn_date, 'YYYY-MM-DD') AS txn_date, description, ref, debit, credit, balance, status, posted_as
+    FROM bank_lines WHERE account_id = $1 AND txn_date BETWEEN $2 AND $3 ORDER BY txn_date, id`, [id, from, to]);
+  const opening = round2(acc.opening + Number(before.net));
+  let run = opening, cr = 0, dr = 0, mismatches = 0;
+  for (const r of rows) {
+    run = round2(run + Number(r.credit) - Number(r.debit)); cr += Number(r.credit); dr += Number(r.debit);
+    r.running = run;
+    r.check = r.balance === null ? null : Math.abs(Number(r.balance) - run) <= 0.5;
+    if (r.check === false) mismatches++;
+  }
+  return json({ account: acc, from, to, opening, closing: run, money_in: round2(cr), money_out: round2(dr), mismatches, rows });
+});
+
+/** Removes entries still waiting in To match (a wrong file, or the wrong account picked). */
+route("POST", "/api/bank/lines/delete", async (c) => {
+  require(c, "accounts", "edit");
+  const ids = (Array.isArray(c.body?.ids) ? c.body.ids : []).map(Number).filter(Boolean);
+  if (!ids.length) fail(400, "Tick the entries to delete.");
+  const res = await q("DELETE FROM bank_lines WHERE id = ANY($1::int[]) AND status = 'new' RETURNING id", [ids]);
+  return json({ deleted: res.length });
 });
 
 route("POST", "/api/bank/upload", async (c) => {
   require(c, "accounts", "edit");
-  const rows = Array.isArray(c.body?.rows) ? c.body.rows.slice(0, 5000) : [];
+  let accountId = num(c.body?.account_id);
+  if (!accountId) {
+    // no account picked: use the only active one, or make the first one
+    const active = await q("SELECT id FROM bank_accounts WHERE active = 1");
+    if (active.length > 1) fail(400, "Pick the bank account this statement is for.");
+    accountId = active.length ? active[0].id : (await one("INSERT INTO bank_accounts (name) VALUES ('Main bank account') RETURNING id")).id;
+  }
+  if (!(await one("SELECT id FROM bank_accounts WHERE id = $1", [accountId]))) fail(400, "Bank account not found.");
+  let rows = Array.isArray(c.body?.rows) ? c.body.rows.slice(0, 5000) : [];
+  // many banks list the newest entry first: store oldest first so the running balance reads in order
+  const days = rows.map((r: any) => isoDate(r.date)).filter(Boolean);
+  if (days.length > 1 && days[0] > days[days.length - 1]) rows = rows.slice().reverse();
   let added = 0, skipped = 0;
   for (const r of rows) {
     const day = isoDate(r.date);
     const debit = round2(Math.abs(num(r.debit) || 0)), credit = round2(Math.abs(num(r.credit) || 0));
     if (!day || (!debit && !credit)) { skipped++; continue; }
-    const res = await q(`INSERT INTO bank_lines (txn_date, description, ref, debit, credit, balance, file_name, created_by)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING RETURNING id`,
-      [day, str(r.description).slice(0, 500), str(r.ref).slice(0, 100) || null, debit, credit, num(r.balance), str(c.body.file).slice(0, 200), c.user!.id]);
+    const res = await q(`INSERT INTO bank_lines (txn_date, description, ref, debit, credit, balance, file_name, created_by, account_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id`,
+      [day, str(r.description).slice(0, 500), str(r.ref).slice(0, 100) || null, debit, credit, num(r.balance), str(c.body.file).slice(0, 200), c.user!.id, accountId]);
     if (res.length) added++; else skipped++;
   }
   return json({ added, skipped });
@@ -2243,6 +2369,19 @@ route("POST", "/api/bank/post", async (c) => {
           postedAs = cat;
           const key = ruleKey(l.description);
           if (key) await query("INSERT INTO bank_rules (key, kind, party_id, category, updated_at) VALUES ($1, 'expense', NULL, $2, NOW()) ON CONFLICT (key) DO UPDATE SET kind = 'expense', party_id = NULL, category = EXCLUDED.category, updated_at = NOW()", [key, cat]);
+        } else if (it.kind === "transfer") {
+          const other = (await query("SELECT id, name FROM bank_accounts WHERE id = $1", [num(it.account_id)]))[0];
+          if (!other || other.id === l.account_id) throw new Error(`${label}: pick the other bank account.`);
+          const mine = (await query("SELECT name FROM bank_accounts WHERE id = $1", [l.account_id]))[0];
+          postedAs = credit ? `Transfer from ${other.name}` : `Transfer to ${other.name}`;
+          // the same money on the other account's statement is closed too
+          const twin = (await query(`SELECT id FROM bank_lines WHERE account_id = $1 AND status = 'new' AND ${credit ? "debit" : "credit"} BETWEEN $2::float8 - 0.5 AND $2::float8 + 0.5
+            AND ABS(txn_date - $3::date) <= 5 ORDER BY ABS(txn_date - $3::date), id LIMIT 1 FOR UPDATE`, [other.id, amt, l.day]))[0];
+          if (twin) {
+            await query("UPDATE bank_lines SET status = 'done', posted_as = $1, transfer_line_id = $2 WHERE id = $3",
+              [credit ? `Transfer to ${mine?.name || "own account"}` : `Transfer from ${mine?.name || "own account"}`, l.id, twin.id]);
+            await query("UPDATE bank_lines SET transfer_line_id = $1 WHERE id = $2", [twin.id, l.id]);
+          }
         } else if (it.kind === "ignore") {
           status = "ignored"; postedAs = "Ignored";
         } else return;
@@ -2261,7 +2400,8 @@ route("POST", "/api/bank/undo/:id", async (c) => {
     // a payment created from this line is removed; one that was typed in earlier and only matched is kept
     if (l.payment_id && String(l.posted_as || "").indexOf("Matched to payment") !== 0) await query("DELETE FROM payments WHERE id = $1", [l.payment_id]);
     if (l.expense_id) await query("DELETE FROM expenses WHERE id = $1", [l.expense_id]);
-    await query("UPDATE bank_lines SET status = 'new', payment_id = NULL, expense_id = NULL, posted_as = NULL WHERE id = $1", [l.id]);
+    const ids = [l.id, ...(l.transfer_line_id ? [l.transfer_line_id] : [])];
+    await query("UPDATE bank_lines SET status = 'new', payment_id = NULL, expense_id = NULL, posted_as = NULL, transfer_line_id = NULL WHERE id = ANY($1::int[])", [ids]);
   });
   return json({ ok: true });
 });
@@ -2270,11 +2410,37 @@ route("GET", "/api/expenses", async (c) => {
   require(c, "accounts");
   const sp = new URL(c.req.url).searchParams;
   const from = isoDate(sp.get("from")) || "1900-01-01", to = isoDate(sp.get("to")) || "2999-12-31";
-  const rows = await q(`SELECT id, to_char(day, 'YYYY-MM-DD') AS day, direction, category, amount, description FROM expenses
-    WHERE day BETWEEN $1 AND $2 ORDER BY day DESC, id DESC`, [from, to]);
+  const rows = await q(`SELECT e.id, to_char(e.day, 'YYYY-MM-DD') AS day, e.direction, e.category, e.amount, e.description, e.bank_line_id,
+      COALESCE(e.paid_by, CASE WHEN e.bank_line_id IS NULL THEN 'Cash' ELSE 'Bank' END) AS paid_by, a.name AS account
+    FROM expenses e LEFT JOIN bank_lines l ON l.id = e.bank_line_id LEFT JOIN bank_accounts a ON a.id = l.account_id
+    WHERE e.day BETWEEN $1 AND $2 ORDER BY e.day DESC, e.id DESC`, [from, to]);
   const byCat = await q(`SELECT category, direction, SUM(amount) AS total, COUNT(*) AS n FROM expenses WHERE day BETWEEN $1 AND $2
     GROUP BY category, direction ORDER BY total DESC`, [from, to]);
-  return json({ rows, byCat });
+  return json({ rows, byCat, categories: EXPENSE_CATEGORIES });
+});
+
+/** An expense or other income paid / received in cash, which no bank statement will show. */
+route("POST", "/api/expenses", async (c) => {
+  require(c, "accounts", "edit");
+  const b = c.body || {};
+  const day = isoDate(b.day) || fail(400, "Date is required.");
+  const cat = str(b.category);
+  if (!EXPENSE_CATEGORIES.includes(cat)) fail(400, "Pick the category.");
+  const amount = round2(num(b.amount) || 0);
+  if (amount <= 0) fail(400, "Enter the amount.");
+  const dir = b.direction === "in" ? "in" : "out";
+  const row = await one("INSERT INTO expenses (day, direction, category, amount, description, paid_by, created_by) VALUES ($1,$2,$3,$4,$5,'Cash',$6) RETURNING id",
+    [day, dir, cat, amount, str(b.description).slice(0, 300) || null, c.user!.id]);
+  return json({ id: row.id });
+});
+
+route("DELETE", "/api/expenses/:id", async (c) => {
+  require(c, "accounts", "edit");
+  const e = await one("SELECT id, bank_line_id FROM expenses WHERE id = $1", [Number(c.params.id)]);
+  if (!e) fail(404, "Not found.");
+  if (e.bank_line_id) fail(400, "This came from the bank statement. Use Undo on the Done tab instead.");
+  await q("DELETE FROM expenses WHERE id = $1", [e.id]);
+  return json({ ok: true });
 });
 
 // ---------------------------------------------------------------- handler
