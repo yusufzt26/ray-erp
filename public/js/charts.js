@@ -21,8 +21,10 @@ function niceMax(v) {
 }
 
 /** Column chart. labels: [..], series: [{ name, values: [..], color }] */
-export function columns(labels, series, { height = 230, fmt = short } = {}) {
-  const W = 640, H = height, L = 52, B = 26, T = 12, R = 8;
+export function columns(labels, series, { height, fmt = short } = {}) {
+  // Wider and flatter on a big screen so the chart is not taller than it needs to be
+  const wide = typeof window !== "undefined" && window.innerWidth > 900;
+  const W = wide ? 1000 : 640, H = height || (wide ? 220 : 230), L = 52, B = 26, T = 12, R = 8;
   const max = niceMax(Math.max(0, ...series.flatMap((s) => s.values.map(Number))));
   const cw = (W - L - R) / Math.max(1, labels.length), gap = cw * 0.22, bw = (cw - gap) / series.length;
   const y = (v) => T + (H - T - B) * (1 - v / max);

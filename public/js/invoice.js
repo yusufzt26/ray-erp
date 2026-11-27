@@ -153,8 +153,8 @@ export function invoicePages(ctx) {
           <label>Customer PAN<input name="pan" class="upper" maxlength="10" value="${h(inv.pan)}"></label>
           <label>Status<select name="status">${["Issued", "Cancelled"].map((s) => `<option ${inv.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
           <label>Type${segmentChoice(inv.segment)}</label>
-          <label class="half">Bill To<textarea name="bill_to" rows="5">${h(inv.bill_to)}</textarea></label>
-          <label class="half">Ship To<textarea name="ship_to" rows="5">${h(inv.ship_to)}</textarea></label>
+          <label class="half">Bill To<textarea name="bill_to" rows="3">${h(inv.bill_to)}</textarea></label>
+          <label class="half">Ship To<textarea name="ship_to" rows="3">${h(inv.ship_to)}</textarea></label>
         </div>
       </div>
       <div class="card">
