@@ -38,7 +38,9 @@ export function columns(labels, series, { height, fmt = short } = {}) {
       const v = Number(s.values[i]) || 0, x = L + i * cw + gap / 2 + j * bw, yy = y(Math.max(0, v));
       g += `<rect x="${x.toFixed(1)}" y="${yy.toFixed(1)}" width="${Math.max(1, bw - 2).toFixed(1)}" height="${(y(0) - yy).toFixed(1)}" rx="2" fill="${s.color}"><title>${h(lab)} · ${h(s.name)}: ${h(fmt(v))}</title></rect>`;
     });
-    g += `<text x="${(L + i * cw + cw / 2).toFixed(1)}" y="${H - 8}" class="ax" text-anchor="middle">${h(lab)}</text>`;
+    // On a phone, label every other column so the labels do not run into each other
+    if (wide || labels.length <= 8 || (labels.length - 1 - i) % 2 === 0)
+      g += `<text x="${(L + i * cw + cw / 2).toFixed(1)}" y="${H - 8}" class="ax" text-anchor="middle">${h(lab)}</text>`;
   });
   const legend = series.length > 1 ? `<div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${h(s.name)}</span>`).join("")}</div>` : "";
   return `${legend}<svg viewBox="0 0 ${W} ${H}" class="chart" role="img">${g}</svg>`;

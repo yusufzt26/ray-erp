@@ -415,3 +415,17 @@ table.grid.master td { vertical-align: top; }
 table.grid.tracelog td.wrap { min-width: 140px; }
 table.grid.master td:first-child { white-space: normal; min-width: 200px; max-width: 280px; }
 table.grid.master td.bomcell { width: 100%; }
+/* Phone: tighter layout, two short fields per row, two KPI tiles per row */
+@media (max-width: 760px) {
+  input, select, textarea { font-size: 16px; } /* 16px stops iPhone zooming in when a box is tapped */
+  .head h1 { font-size: 1.2rem; }
+  .card { padding: .6rem .7rem; }
+  .form-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: .45rem .6rem; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
+  .kpi { padding: .45rem .6rem; } .kpi b { font-size: 1.2rem; } .kpi span { font-size: .68rem; }
+  .quick { gap: .45rem; } .quick .tile { min-width: 0; flex: 1 1 40%; padding: .45rem .6rem; }
+  .dgrid { gap: .5rem; } .panel { padding: .55rem .65rem; }
+  .donut svg { width: 110px; }
+  .form-grid > label:has(#customer_id, #party_id) { grid-column: 1 / -1; } /* long party names stay readable */
+  .lines select[name=box_line] { width: 150px; } .lines input[name=box_qty] { width: 80px; }
+}
