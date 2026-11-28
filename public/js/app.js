@@ -10,6 +10,7 @@ import { saveWorkbook } from "./download.js";
 import { bankPages } from "./bank.js";
 import { planPages } from "./plan.js";
 import { DASHBOARDS, defaultDash, renderDash } from "./dash.js";
+import { bellHtml, forgetDevice, homeBanner, mountBell, startNotifications, stopNotifications, wireHomeBanner } from "./notify.js";
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -90,13 +91,15 @@ function layout(body) {
     <header class="top">
       <button class="menu-btn" aria-label="Menu" onclick="document.body.classList.toggle('nav-open')">☰</button>
       <a class="brand" href="#/"><img src="/mark.png?v=2" alt=""> ${h(S.settings.company_name || "Ray Precicomp")} <span>ERP</span></a>
+      ${bellHtml()}
       <div class="who">${h(S.user.full_name)} · <b>${h(S.user.role)}</b> · <a href="#/password">Password</a> · <a href="#" id="logout">Log out</a></div>
     </header>
     <div class="layout"><nav class="side" onclick="document.body.classList.remove('nav-open')">${side}</nav>
     <main>${flashes.map((f) => `<div class="flash ${f.kind}">${h(f.msg)}</div>`).join("")}${body}</main></div>`;
   shownFlashes = flashes; flashes = [];
   addInstallButton();
-  $("#logout").onclick = async (e) => { e.preventDefault(); await api("POST", "/api/logout", {}); S.user = null; location.hash = "#/login"; };
+  mountBell();
+  $("#logout").onclick = async (e) => { e.preventDefault(); await forgetDevice(); stopNotifications(); await api("POST", "/api/logout", {}); S.user = null; location.hash = "#/login"; };
 }
 
 export const segmentSelect = segmentFilter;
@@ -150,8 +153,10 @@ pages.dashboard = async () => {
     <div class="head"><h1>Welcome, ${h(S.user.full_name)}</h1>
       ${views.length > 1 ? `<div class="tabs dtabs">${views.map((k) => `<a href="#/?view=${k}" class="${k === view ? "on" : ""}">${DASHBOARDS[k].icon} ${DASHBOARDS[k].label}</a>`).join("")}</div>` : ""}</div>
     ${S.defaultPw ? `<div class="flash error">You are using the default admin password. <a href="#/password">Change it now</a>.</div>` : ""}
+    ${homeBanner()}
     <div class="quick slim">${quick.map(([href, t, s]) => `<a class="tile action" href="${href}"><b>${t}</b><span>${s}</span></a>`).join("")}</div>
     ${d ? renderDash(view, d) : '<p class="muted">Use the menu on the left to get started.</p>'}`);
+  wireHomeBanner();
 };
 
 pages.password = () => {
@@ -994,6 +999,7 @@ async function loadMe() {
   const me = await api("GET", "/api/me");
   S = { user: me.user, perms: me.perms || {}, settings: me.settings || S.settings, defaultPw: me.defaultPw };
   addCategories(me.categories);
+  if (S.user) startNotifications(api);
 }
 
 // A slow page that finishes after a newer one would paint over it; if that happens, draw the current page again.

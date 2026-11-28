@@ -5,6 +5,7 @@ import { BUILTIN_CATEGORIES, CONVERT, DOC_TYPES, LEVELS, MASTERS, MODULES, PRODU
 import { clearCookie, makeSessionCookie, readSession } from "../lib/auth.mts";
 import { matchParty, matchProducts } from "../lib/match.mts";
 import { nextCode, one, pdfStore, q, tx } from "../lib/db.mts";
+import { NOTIFY_KINDS, feedModules, notify, rupees, unreadCount, vapidKeys } from "../lib/notify.mts";
 
 class HttpError extends Error {
   status: number;
@@ -97,7 +98,7 @@ route("POST", "/api/logout", async () => json({ ok: true }, 200, { "set-cookie":
 
 route("GET", "/api/me", async (c) => {
   if (!c.user) return json({ user: null });
-  const settings = Object.fromEntries((await q("SELECT key, value FROM settings WHERE key <> 'session_secret'")).map((r) => [r.key, r.value]));
+  const settings = Object.fromEntries((await q("SELECT key, value FROM settings WHERE key NOT IN ('session_secret', 'vapid_keys')")).map((r) => [r.key, r.value]));
   const defaultPw = c.user.username === "admin" && (await bcrypt.compare("admin123", c.user.password_hash));
   const { password_hash, ...user } = c.user;
   const categories = Object.entries(PRODUCT_CATEGORIES).map(([code, name]) => ({ code, name }));
@@ -556,9 +557,13 @@ route("POST", "/api/d/:type/save", async (c) => {
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, [id, i + 1, ...lines[i]]);
     const parentId = (await query("SELECT parent_id FROM documents WHERE id = $1", [id]))[0]?.parent_id;
     if (parentId) await refreshStatus(query, parentId);
-    return { id, ref_no: refNo };
+    return { id, ref_no: refNo, party: partyName, total: header.total_amount };
   });
-  return json({ ...result, messages });
+  if (!did) await notify({ module: type, actor: c.user!.id, link: `#/d/${type}/${result.id}`,
+    title: `${d.icon} New ${d.singular} ${result.ref_no}`,
+    body: [result.party, result.total ? rupees(result.total) : "", `by ${c.user!.full_name}`].filter(Boolean).join(" · ") });
+  const { party: _p, total: _t, ...out } = result;
+  return json({ ...out, messages });
 });
 
 route("DELETE", "/api/d/:type/:id", async (c) => {
@@ -852,6 +857,8 @@ route("POST", "/api/invoices/save", async (c) => {
     if (header.challan_id) await refreshStatus(query, header.challan_id);
     return { id: invId, inv_no: invNo };
   });
+  if (!id) await notify({ module: "sales_invoice", actor: c.user!.id, link: `#/invoices/${res.id}`,
+    title: `🧾 New Sales Invoice ${res.inv_no}`, body: `${cust.name} · ${rupees(total)} · by ${c.user!.full_name}` });
   return json(res);
 });
 
@@ -1515,6 +1522,11 @@ route("POST", "/api/production/daily", async (c) => {
       await bookProduction(query, { line_id: l.line_id, product_id: l.product_id!, qty: l.qty!, day, shift: str(b.shift), operator: str(b.operator), remarks: l.remarks, user: c.user!.id });
     }
   });
+  const names = await q("SELECT id, name FROM products WHERE id = ANY($1)", [lines.map((l: any) => l.product_id)]);
+  const nameOf = (id: number) => names.find((n) => n.id === id)?.name || "item";
+  const made = lines.slice(0, 3).map((l: any) => `${nameOf(l.product_id)} ${Number(l.qty).toLocaleString("en-IN")}`).join(", ") + (lines.length > 3 ? ` +${lines.length - 3} more` : "");
+  await notify({ module: "production", actor: c.user!.id, link: "#/production",
+    title: `🏭 Production logged${str(b.shift) ? ` (${str(b.shift)} shift)` : ""}`, body: `${made} · by ${c.user!.full_name}` });
   return json({ ok: true, saved: lines.length });
 });
 
@@ -2056,6 +2068,10 @@ route("POST", "/api/payments", async (c) => {
     for (const a of allocs) await query("INSERT INTO payment_allocations (payment_id, bill_id, amount) VALUES ($1, $2, $3)", [row.id, a.bill_id, a.amount]);
     return row.id;
   });
+  const party = await one(`SELECT name FROM ${dir === "in" ? "customers" : "vendors"} WHERE id = $1`, [partyId]);
+  await notify({ module: "accounts", actor: c.user!.id, link: "#/accounts",
+    title: dir === "in" ? `💰 Payment received ${rupees(amount)}` : `💸 Payment made ${rupees(amount)}`,
+    body: `${dir === "in" ? "From" : "To"} ${party?.name || ""}${str(b.mode) ? ` · ${str(b.mode)}` : ""} · by ${c.user!.full_name}` });
   return json({ id });
 });
 
@@ -2440,6 +2456,65 @@ route("DELETE", "/api/expenses/:id", async (c) => {
   if (!e) fail(404, "Not found.");
   if (e.bank_line_id) fail(400, "This came from the bank statement. Use Undo on the Done tab instead.");
   await q("DELETE FROM expenses WHERE id = $1", [e.id]);
+  return json({ ok: true });
+});
+
+// ---------------------------------------------------------------- notifications (bell + pop-ups)
+const meOnly = (c: Ctx) => c.user || fail(401, "Please log in.");
+
+route("GET", "/api/notifications", async (c) => {
+  const u: any = meOnly(c);
+  const after = Number(new URL(c.req.url).searchParams.get("after") || 0);
+  const mods = feedModules(u.role, c.perms, u.notif_off || "");
+  const rows = await q(`SELECT id, module, title, body, link, created_at FROM notifications
+    WHERE id > $3 AND (user_id = $1 OR (user_id IS NULL AND module = ANY($2) AND COALESCE(actor_id, 0) <> $1))
+    ORDER BY id DESC LIMIT 40`, [u.id, mods, after]);
+  const kinds = Object.entries(NOTIFY_KINDS).filter(([m]) => u.role === "Admin" || (c.perms[m] && c.perms[m] !== "none"))
+    .map(([key, label]) => ({ key, label, on: !String(u.notif_off || "").split(",").includes(key) }));
+  const devices = (await one("SELECT COUNT(*)::int AS n FROM push_subscriptions WHERE user_id = $1", [u.id]))?.n || 0;
+  return json({ rows, seen: u.notif_seen_id || 0, unread: await unreadCount(u, c.perms), kinds, devices });
+});
+
+route("POST", "/api/notifications/seen", async (c) => {
+  const u: any = meOnly(c);
+  const upto = Math.max(Number(c.body.upto) || 0, 0);
+  await q("UPDATE users SET notif_seen_id = GREATEST(notif_seen_id, $1) WHERE id = $2", [upto, u.id]);
+  return json({ ok: true });
+});
+
+route("PUT", "/api/notifications/prefs", async (c) => {
+  const u: any = meOnly(c);
+  const off = (Array.isArray(c.body.off) ? c.body.off : []).filter((k: string) => k in NOTIFY_KINDS);
+  await q("UPDATE users SET notif_off = $1 WHERE id = $2", [off.join(","), u.id]);
+  return json({ ok: true });
+});
+
+route("GET", "/api/push/key", async (c) => {
+  meOnly(c);
+  return json({ key: (await vapidKeys()).publicKey });
+});
+
+route("POST", "/api/push/subscribe", async (c) => {
+  const u: any = meOnly(c);
+  const s = c.body?.subscription || {};
+  const endpoint = str(s.endpoint), p256dh = str(s.keys?.p256dh), auth = str(s.keys?.auth);
+  if (!/^https:\/\//.test(endpoint) || !p256dh || !auth) fail(400, "This browser did not give a valid push address.");
+  await q(`INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, device) VALUES ($1,$2,$3,$4,$5)
+    ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, device = EXCLUDED.device`,
+    [u.id, endpoint, p256dh, auth, str(c.body.device).slice(0, 120) || null]);
+  return json({ ok: true });
+});
+
+route("POST", "/api/push/unsubscribe", async (c) => {
+  const u: any = meOnly(c);
+  await q("DELETE FROM push_subscriptions WHERE user_id = $1 AND endpoint = $2", [u.id, str(c.body.endpoint)]);
+  return json({ ok: true });
+});
+
+route("POST", "/api/notifications/test", async (c) => {
+  const u: any = meOnly(c);
+  await notify({ module: "test", onlyUser: u.id, link: "#/", title: "🔔 Test alert from Ray Precicomp ERP",
+    body: "Notifications are working on this device. You will get alerts like this for new orders, invoices, payments and production." });
   return json({ ok: true });
 });
 

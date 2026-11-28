@@ -16,6 +16,7 @@
     "pdfjs-dist": "5.4.296",
     "tesseract.js": "5.1.1",
     "tesseract.js-core": "5.1.1",
+    "web-push": "^3.6.7",
     "xlsx": "0.18.5"
   },
   "devDependencies": {
